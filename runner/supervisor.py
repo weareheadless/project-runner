@@ -76,14 +76,22 @@ def snapshot(ctx):
         replies = ctx.api(f'https://api.github.com/repos/{ctx.cfg.get("notification_repo", ctx.repo)}/issues/{issue["number"]}/comments?per_page=100')
     worker_path = ctx.state / 'workers.json'
     workers = json.loads(worker_path.read_text()) if worker_path.exists() else {}
-    worker_states = []
+    worker_states, changed = [], False
     for run, worker in workers.items():
+        if worker.get('terminal'):
+            continue
         info = oc('get', f'/api/session/{worker["session"]}')['data']
+        terminal = bool(info.get('time', {}).get('idle'))
+        if terminal:
+            worker['terminal'], worker['outcome'] = True, info.get('outcome')
+            changed = True
         worker_states.append({'run': run, 'session': worker['session'],
                               'repository': worker['repository'], 'issue': worker['issue'],
                               'admitted': worker.get('admitted'),
-                              'terminal': bool(info.get('time', {}).get('idle')),
+                              'terminal': terminal,
                               'outcome': info.get('outcome')})
+    if changed:
+        save(worker_path, workers)
     return {'cards': sorted(cards, key=lambda x: x['id']),
             'pulls': sorted(pulls, key=lambda x: (x['repository'], x['number'])),
             'runs': runs_all,
@@ -240,12 +248,14 @@ def quota_check(ctx, state):
         return True
     if state.get('paused'):
         return False  # Quota recovery must never clear an unrelated safety pause.
+    # An episode ends when the resumed sessions have stopped running, whatever
+    # the outcome. A later, different failure is not this episode's problem, and
+    # leaving the flag set would silence the next quota alert.
     recovering = state.get('quota_recovering', [])
-    if recovering and all(oc('get', f'/api/session/{sid}')['data'].get('outcome') == 'succeeded'
+    if recovering and all(oc('get', f'/api/session/{sid}')['data'].get('time', {}).get('idle')
                           for sid in recovering):
         state.pop('quota_recovering', None)
         state.pop('quota_attempts', None)
-        state.pop('quota_notified', None)
     failures = quota_failures(ctx, state)
     if not failures:
         return False
@@ -263,7 +273,7 @@ def quota_check(ctx, state):
     state['quota_attempts'] = attempt
     save(ctx.state / 'supervisor.json', state)
     # One durable event per exhaustion episode, not one alert per poll/retry.
-    if not state.get('quota_notified'):
+    if state.get('quota_notified') not in hold['markers']:
         event = {'id': f'quota-{hold["markers"][0]}', 'kind': 'quota-paused',
                  'message': 'Codex/provider quota exhausted. Work and claims are preserved. '
                             + ('Will retry after the provider reset.' if hold['explicit_reset']
@@ -273,7 +283,7 @@ def quota_check(ctx, state):
         outbox.mkdir(exist_ok=True)
         save(outbox / (event['id'] + '.json'), event)
         ui_notify(event)
-        state['quota_notified'] = True
+        state['quota_notified'] = hold['markers'][0]
     return True
 
 

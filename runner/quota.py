@@ -9,7 +9,8 @@ def quota_error(error):
     body = error.get('response', {}).get('body', '')
     text = (text + ' ' + body).lower()
     return bool(re.search(
-        r'usage[_ -]limit[_ -](?:reached|exceeded)|insufficient_quota|'
+        r'provider\.quota|usage[_ -]limit[_ -](?:reached|exceeded)|'
+        r'usage limit has been reached|insufficient_quota|'
         r'quota[_ -](?:exceeded|exhausted)|billing_hard_limit|'
         r'(?:codex|subscription|weekly|monthly|daily).{0,60}(?:limit reached|quota exhausted)|'
         r"you(?: have|'ve) (?:hit|reached).{0,30}(?:usage|plan) limit", text))

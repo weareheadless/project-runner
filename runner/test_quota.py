@@ -110,3 +110,33 @@ class QuotaLifecycleTests(unittest.TestCase):
         oc.return_value = {'data': []}
         self.assertFalse(s.quota_check(self.ctx, {}))
         self.assertIn('ses_worker/message', oc.call_args.args[1])
+
+
+class QuotaNotificationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ctx = Mock()
+        self.ctx.state = Path(self.tmp.name)
+        self.ctx.cfg = {}
+
+    @patch.object(s, 'ui_notify')
+    @patch.object(s, 'oc')
+    @patch.object(s.time, 'time', return_value=5000)
+    def test_new_episode_renotifies_after_earlier_alert(self, clock, oc, ui):
+        oc.side_effect = [{'data': [{'id': 'msg_new', 'type': 'idle',
+            'error': {'type': 'provider.quota', 'message': 'The usage limit has been reached'}}]},
+            {'data': {'time': {'idle': 1}}}]
+        state = {'active': {'id': 'ses_a', 'started': 1000}, 'quota_notified': 'ses_old:msg_old'}
+        self.assertTrue(s.quota_check(self.ctx, state))
+        self.assertEqual(state['quota_notified'], 'ses_a:msg_new')
+        self.assertEqual(len(list((self.ctx.state/'outbox').glob('*.json'))), 1)
+        ui.assert_called_once()
+
+    @patch.object(s, 'oc')
+    def test_episode_ends_when_resumed_session_stops_even_if_failed(self, oc):
+        oc.return_value = {'data': {'time': {'idle': 1}, 'outcome': 'failed'}}
+        state = {'quota_recovering': ['ses_a'], 'quota_attempts': 1}
+        self.assertFalse(s.quota_check(self.ctx, state))
+        self.assertNotIn('quota_recovering', state)
+        self.assertNotIn('quota_attempts', state)
