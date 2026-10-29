@@ -19,6 +19,7 @@ from pathlib import Path
 from tick import ROOT, Ctx, board, fields
 import credentials
 import availability
+import test_results
 from quota import quota_error, suspension
 
 
@@ -330,15 +331,49 @@ def handle_auth(ctx, state, failures, now):
     # Nothing usable: a 401 does not heal by waiting, so stop and ask for a human.
     state['paused'] = True
     state['paused_reason'] = 'credential refused by provider access policy'
+    active = next((c for c in listed if c['active']), None)
+    if active:
+        state['active_credential_id'] = active['id']
     event = {'id': 'auth-blocked-' + failures[0][2], 'kind': 'blocked',
              'message': 'OpenAI refused the active credential (401 access enforcement) and no other '
-                        'configured account can be used. Re-login or grant model access, then clear the pause.'}
+                        'configured account can be used. Log in with an authorized OpenAI account; the '
+                        'runner will resume automatically when it detects the new usable credential.'}
     outbox = ctx.state / 'outbox'
     outbox.mkdir(exist_ok=True)
     save(outbox / (event['id'] + '.json'), event)
     ui_notify(event)
     save(ctx.state / 'supervisor.json', state)
     return True
+
+
+def observe_active_credential(ctx, state, now):
+    """Invalidate stale change-detection state after a usable account switch."""
+    listed = credentials.accounts(oc)
+    active = next((c for c in listed if c['active']), None)
+    usable = credentials.choose(state, listed, now)
+    if not active or not usable or usable['id'] != active['id']:
+        return False
+    previous = state.get('active_credential_id')
+    changed = previous is not None and previous != active['id']
+    # One-time migration for pre-identity state: the old failed coordinator
+    # fingerprint otherwise suppresses recovery forever after an operator clears
+    # the pause. Do not repeat this on subsequent polls.
+    legacy_failed = (previous is None and not state.get('paused') and bool(state.get('fingerprint'))
+                    and state.get('last_outcome') == 'failed'
+                    and not state.get('active') and not state.get('quota'))
+    state['active_credential_id'] = active['id']
+    if legacy_failed and not state.get('legacy_credential_recovery_initialized'):
+        state['legacy_credential_recovery_initialized'] = True
+        changed = True
+    if changed:
+        state.pop('fingerprint', None)
+    if state.get('paused') and state.get('paused_reason') == 'credential refused by provider access policy':
+        if changed:
+            state.pop('paused', None)
+            state.pop('paused_reason', None)
+        else:
+            return False
+    return changed
 
 
 def quota_check(ctx, state):
@@ -483,6 +518,10 @@ def check_pr_closures(ctx, state, current):
 
 
 def step(ctx, state):
+    # GitHub reporting is zero-model work: retain it even during quota cooldowns.
+    test_reports = test_results.process_pending(ctx)
+    if test_reports['processed'] or test_reports['errors']:
+        save(ctx.state / 'test-report-health.json', test_reports)
     process_outbox(ctx)
     if quota_check(ctx, state):
         return state
@@ -502,6 +541,9 @@ def step(ctx, state):
               for p in policy_paths if p.exists()}
     fingerprint = digest({'project': current, 'policy': policy})
     save(ctx.state / 'snapshot.json', current)
+    if state.get('paused') and state.get('paused_reason') != 'credential refused by provider access policy':
+        return state
+    observe_active_credential(ctx, state, time.time())
     active = state.get('active')
     if active:
         info = oc('get', f'/api/session/{active["id"]}')['data']
@@ -519,15 +561,30 @@ def step(ctx, state):
         if info.get('outcome') != 'succeeded' and recoverable:
             return state  # provider failure: rotation or cooldown owns it
         if info.get('outcome') != 'succeeded':
-            notify(ctx, {'id': f'failed-{active["id"]}', 'kind': 'blocked',
-                         'message': f'Coordinator failed: {active["id"]}. Automation paused; no automatic retry storm.'})
-            state['paused'] = True
+            # A session may outlive the credential it was admitted with. If an
+            # operator replaced that account and the replacement is usable,
+            # leave recovery to observe_active_credential below; do not turn an
+            # otherwise unexplained terminal outcome into a safety pause.
+            bound = state.get('session_credentials', {}).get(active['id'])
+            replaced_with_usable = False
+            if bound:
+                listed = credentials.accounts(oc)
+                replaced_with_usable = (not any(account.get('id') == bound for account in listed)
+                                        and bool(credentials.choose(state, listed, time.time())))
+            if replaced_with_usable:
+                # Admit the replacement pass even when the board snapshot is
+                # unchanged; otherwise the old fingerprint suppresses recovery.
+                state.pop('fingerprint', None)
+            else:
+                notify(ctx, {'id': f'failed-{active["id"]}', 'kind': 'blocked',
+                             'message': f'Coordinator failed: {active["id"]}. Automation paused; no automatic retry storm.'})
+                state['paused'] = True
         # The changes made by this run are reconciled on the next pass, not lost.
     if state.get('paused') or state.get('fingerprint') == fingerprint:
         return state
     # Validate installed agent before creating sessions.
     oc('get', '/api/agent/sol-tick')
-    credential_id = next((c['id'] for c in credentials.accounts(oc) if c['active']), None) if ctx.cfg.get('credential_failover') else None
+    credential_id = state.get('active_credential_id') if ctx.cfg.get('credential_failover') else None
     session = oc('post', '/api/session', {
         'title': 'Project runner — reconcile', 'agent': 'sol-tick',
         'model': ctx.cfg['orchestrator_model'],

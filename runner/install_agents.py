@@ -41,7 +41,11 @@ def generate():
         agents[path.stem] = data
     out = ROOT / '.opencode' / 'opencode.json'
     out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps({'$schema': 'https://opencode.ai/config.json', 'agents': agents}, indent=2))
+    out.write_text(json.dumps({
+        '$schema': 'https://opencode.ai/config.json',
+        'providers': {'openai': {'models': {'gpt-6.1-sol': {}, 'gpt-6-luna': {}}}},
+        'agents': agents,
+    }, indent=2))
 
 
 if __name__ == '__main__':

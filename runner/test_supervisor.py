@@ -55,6 +55,9 @@ class SupervisorTests(unittest.TestCase):
         quota_patch = patch.object(s, 'quota_check', return_value=False)
         quota_patch.start()
         self.addCleanup(quota_patch.stop)
+        accounts_patch = patch.object(s.credentials, 'accounts', return_value=[])
+        accounts_patch.start()
+        self.addCleanup(accounts_patch.stop)
         self.ctx = Mock()
         self.ctx.state = Path(self.tmp.name)
         self.ctx.cfg = dict(name='test', orchestrator_model={'id': 'model', 'providerID': 'provider'},
@@ -110,6 +113,86 @@ class SupervisorTests(unittest.TestCase):
         self.assertTrue(state['paused'])
         notify.assert_called_once()
 
+    @patch.object(s, 'notify')
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_replaced_bound_credential_admits_recovery_without_pause(self, oc, snapshot, outbox, notify):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        oc.side_effect = [
+            {'data': {'time': {'idle': True}, 'outcome': 'failed'}},
+            {'data': []}, {}, {'data': {'id': 'ses_recovered'}}, {},
+        ]
+        state = {'active': {'id': 'ses_failed', 'started': 1},
+                 'session_credentials': {'ses_failed': 'cred_old'},
+                 'active_credential_id': 'cred_old'}
+        result = s.step(self.ctx, state)
+        self.assertFalse(result.get('paused', False))
+        self.assertEqual(result['active']['id'], 'ses_recovered')
+        notify.assert_not_called()
+
+    @patch.object(s, 'notify')
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_replaced_binding_recovers_after_switch_was_already_observed(self, oc, snapshot, outbox, notify):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        oc.side_effect = [
+            {'data': {'time': {'idle': True}, 'outcome': 'failed'}},
+            {'data': []}, {}, {'data': {'id': 'ses_recovered'}}, {},
+        ]
+        policy_paths = [s.ROOT / 'rules' / 'TICK.md', s.ROOT / 'projects' / 'test.json']
+        policy = {str(p.relative_to(s.ROOT)): s.digest(p.read_text()) for p in policy_paths if p.exists()}
+        fingerprint = s.digest({'project': self.snap, 'policy': policy})
+        state = {'active': {'id': 'ses_failed', 'started': 1},
+                 'session_credentials': {'ses_failed': 'cred_old'},
+                 'active_credential_id': 'cred_new', 'fingerprint': fingerprint}
+        result = s.step(self.ctx, state)
+        self.assertFalse(result.get('paused', False))
+        self.assertEqual(result['active']['id'], 'ses_recovered')
+        notify.assert_not_called()
+
+    @patch.object(s, 'notify')
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_failed_session_keeps_pause_when_binding_exists(self, oc, snapshot, outbox, notify):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_old', 'active': True}]
+        oc.return_value = {'data': {'time': {'idle': True}, 'outcome': 'failed'}}
+        state = {'active': {'id': 'ses_failed', 'started': 1},
+                 'session_credentials': {'ses_failed': 'cred_old'}}
+        result = s.step(self.ctx, state)
+        self.assertTrue(result['paused'])
+        notify.assert_called_once()
+
+    @patch.object(s, 'notify')
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_replaced_binding_without_usable_credential_keeps_pause(self, oc, snapshot, outbox, notify):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        with patch.object(s.credentials, 'choose', return_value=None):
+            oc.return_value = {'data': {'time': {'idle': True}, 'outcome': 'failed'}}
+            result = s.step(self.ctx, {'active': {'id': 'ses_failed', 'started': 1},
+                                      'session_credentials': {'ses_failed': 'cred_old'}})
+        self.assertTrue(result['paused'])
+        notify.assert_called_once()
+
+    @patch.object(s, 'notify')
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_failed_unbound_session_keeps_pause(self, oc, snapshot, outbox, notify):
+        snapshot.return_value = self.snap
+        oc.return_value = {'data': {'time': {'idle': True}, 'outcome': 'failed'}}
+        result = s.step(self.ctx, {'active': {'id': 'ses_failed', 'started': 1}})
+        self.assertTrue(result['paused'])
+        notify.assert_called_once()
+
     def test_human_test_requires_live_instructions(self):
         with self.assertRaises(ValueError):
             s.notify(self.ctx, {'id': 'test', 'kind': 'human-test', 'message': 'test it'})
@@ -163,6 +246,127 @@ class SupervisorTests(unittest.TestCase):
         state = s.step(self.ctx, {'active': {'id': 'ses_done', 'started': 1, 'admitted': True},
                                   'fingerprint': 'old-state'})
         self.assertEqual(state['active']['id'], 'ses_followup')
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_changed_active_credential_wakes_unchanged_snapshot_once(self, oc, snapshot, outbox):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        oc.side_effect = [{}, {'data': {'id': 'ses_recovered'}}, {}]
+        policy_paths = [s.ROOT / 'rules' / 'TICK.md', s.ROOT / 'projects' / 'test.json']
+        policy = {str(p.relative_to(s.ROOT)): s.digest(p.read_text()) for p in policy_paths if p.exists()}
+        fingerprint = s.digest({'project': self.snap, 'policy': policy})
+        state = {'active_credential_id': 'cred_old', 'fingerprint': fingerprint}
+        result = s.step(self.ctx, state)
+        self.assertEqual(result['active']['id'], 'ses_recovered')
+        self.assertEqual(result['active_credential_id'], 'cred_new')
+        finished = dict(result, active=None, last_outcome='succeeded')
+        oc.reset_mock()
+        oc.side_effect = [{'data': {'time': {'idle': True}, 'outcome': 'succeeded'}},
+                          {'data': []}]
+        s.step(self.ctx, finished)
+        self.assertFalse(any(call.args[0] == 'post' and call.args[1] == '/api/session'
+                             for call in oc.call_args_list))
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_same_active_credential_does_not_wake(self, oc, snapshot, outbox):
+        snapshot.return_value = self.snap
+        policy_paths = [s.ROOT / 'rules' / 'TICK.md', s.ROOT / 'projects' / 'test.json']
+        policy = {str(p.relative_to(s.ROOT)): s.digest(p.read_text()) for p in policy_paths if p.exists()}
+        fingerprint = s.digest({'project': self.snap, 'policy': policy})
+        s.credentials.accounts.return_value = [{'id': 'cred_same', 'active': True}]
+        s.step(self.ctx, {'active_credential_id': 'cred_same', 'fingerprint': fingerprint})
+        self.assertFalse(any(call.args[1] == '/api/session' for call in oc.call_args_list))
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_credential_change_does_not_duplicate_running_coordinator(self, oc, snapshot, outbox):
+        import time
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        oc.return_value = {'data': {'time': {}}}
+        state = {'active_credential_id': 'cred_old', 'active': {
+            'id': 'ses_running', 'started': time.time(), 'admitted': True}}
+        result = s.step(self.ctx, state)
+        self.assertEqual(result['active']['id'], 'ses_running')
+        self.assertEqual(oc.call_count, 1)
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_unrelated_safety_pause_is_not_cleared_by_credential_change(self, oc, snapshot, outbox):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        state = {'active_credential_id': 'cred_old', 'paused': True,
+                 'paused_reason': 'operator safety hold'}
+        result = s.step(self.ctx, state)
+        self.assertTrue(result['paused'])
+        self.assertEqual(result['paused_reason'], 'operator safety hold')
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_auth_pause_recovers_only_after_credential_change(self, oc, snapshot, outbox):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        oc.side_effect = [{}, {'data': {'id': 'ses_auth_recovery'}}, {}]
+        policy_paths = [s.ROOT / 'rules' / 'TICK.md', s.ROOT / 'projects' / 'test.json']
+        policy = {str(p.relative_to(s.ROOT)): s.digest(p.read_text()) for p in policy_paths if p.exists()}
+        fingerprint = s.digest({'project': self.snap, 'policy': policy})
+        state = {'active_credential_id': 'cred_old', 'paused': True,
+                 'paused_reason': 'credential refused by provider access policy',
+                 'fingerprint': fingerprint}
+        result = s.step(self.ctx, state)
+        self.assertFalse(result.get('paused', False))
+        self.assertEqual(result['active']['id'], 'ses_auth_recovery')
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_legacy_auth_pause_with_mixed_bindings_stays_paused(self, oc, snapshot, outbox):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_new', 'active': True}]
+        state = {'paused': True, 'paused_reason': 'credential refused by provider access policy',
+                 'session_credentials': {'ses_old_a': 'cred_a', 'ses_old_b': 'cred_b'}}
+        result = s.step(self.ctx, state)
+        self.assertTrue(result['paused'])
+        self.assertEqual(result['paused_reason'], 'credential refused by provider access policy')
+        self.assertFalse(any(call.args[0] == 'post' and call.args[1] == '/api/session'
+                             for call in oc.call_args_list))
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_unusable_new_active_credential_does_not_wake(self, oc, snapshot, outbox):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [
+            {'id': 'cred_new', 'active': True}, {'id': 'cred_old', 'active': False}]
+        policy_paths = [s.ROOT / 'rules' / 'TICK.md', s.ROOT / 'projects' / 'test.json']
+        policy = {str(p.relative_to(s.ROOT)): s.digest(p.read_text()) for p in policy_paths if p.exists()}
+        fingerprint = s.digest({'project': self.snap, 'policy': policy})
+        state = {'active_credential_id': 'cred_old', 'fingerprint': fingerprint,
+                 'credentials': {'cred_new': {'broken_until': 9999999999}}}
+        s.step(self.ctx, state)
+        self.assertFalse(any(call.args[0] == 'post' and call.args[1] == '/api/session'
+                             for call in oc.call_args_list))
+
+    @patch.object(s, 'process_outbox')
+    @patch.object(s, 'snapshot')
+    @patch.object(s, 'oc')
+    def test_legacy_failed_state_gets_one_recovery_wake(self, oc, snapshot, outbox):
+        snapshot.return_value = self.snap
+        s.credentials.accounts.return_value = [{'id': 'cred_current', 'active': True}]
+        oc.side_effect = [{}, {'data': {'id': 'ses_legacy_recovery'}}, {}]
+        policy_paths = [s.ROOT / 'rules' / 'TICK.md', s.ROOT / 'projects' / 'test.json']
+        policy = {str(p.relative_to(s.ROOT)): s.digest(p.read_text()) for p in policy_paths if p.exists()}
+        fingerprint = s.digest({'project': self.snap, 'policy': policy})
+        state = {'fingerprint': fingerprint, 'last_outcome': 'failed'}
+        result = s.step(self.ctx, state)
+        self.assertEqual(result['active']['id'], 'ses_legacy_recovery')
 
 
 if __name__ == '__main__':
