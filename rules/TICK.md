@@ -33,7 +33,15 @@ and obtain the claim before implementation. Never fabricate broad src/** scope
 when an issue provides narrower boundaries. Plan candidates from runner/tick.py
 are suggestions, not authority to skip these checks.
 
-Dispatch independent workers in parallel. Workers must never merge or deploy.
+Start workers via `python3 runner/workers.py --project <project> --plan <plan.json>
+--brief <brief.md> --effort low|medium|high`. This creates durable independent
+sessions and enforces the global capacity cap. Do NOT wait for an entire batch
+using foreground subagents. Return after dispatch: the supervisor observes each
+worker's terminal state and immediately wakes a fresh SOL pass to review it and
+refill its slot, even if the other workers are still busy. An unacknowledged
+worker admission is ambiguous: inspect that session's inbox, never start a duplicate.
+
+Workers must never merge or deploy.
 Review their diffs yourself. The shared Python venv can import main instead of a
 worktree: require PYTHONPATH="$PWD/src" and an import-location assertion before
 accepting test results. Scope, tests, exact tested SHA, secrets and migrations

@@ -19,7 +19,10 @@ board edits, PR heads/checks, main workflows, release receipts and owner replies
 wake a fresh SOL pass. One active coordinator per project, an OS-held lock,
 durable session IDs, bounded runtime, and pause-on-failure prevent duplicate
 dispatches and retry storms. No public endpoint or webhook secret is required.
-Workers report to SOL as they complete; SOL handles them in its active pass.
+Workers are durable independent sessions started with runner/workers.py. Each
+completion wakes a fresh SOL pass, which reviews that result and refills the
+free slot without waiting for the slowest worker in a batch. Concurrency is
+enforced in code, not just in the prompt.
 
 The old 30-minute OpenChamber schedule must remain disabled. Do not run both.
 `runner/project-runner.service` is a user-systemd service for this host. Install

@@ -24,6 +24,8 @@
   },
   "default_effort": "low",
   "auto_merge": true,
+  "coordination_checker": "/home/admin/tools/project-runner-checker/tools/agent-coordination/cli.mjs",
+  "coordination_checker_sha": "14b30aa99bdc4c2220d661a431b1a3ab1a6e05f4",
   "poll_seconds": 20,
   "github_timeout": 12,
   "github_attempts": 2,

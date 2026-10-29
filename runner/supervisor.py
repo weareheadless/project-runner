@@ -13,6 +13,7 @@ import subprocess
 import time
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from tick import ROOT, Ctx, board, fields
@@ -44,9 +45,8 @@ def snapshot(ctx):
         cards.append({'id': n['id'], 'issue': c.get('number'),
                       'state': c.get('state'), 'title': c.get('title'),
                       'body': c.get('body'), 'fields': fields(n)})
-    pulls = []
-    runs_all = []
-    for repo in ctx.cfg.get('repositories', [ctx.repo]):
+    def repo_state(repo):
+      pulls = []
       prs = ctx.api(f'https://api.github.com/repos/{repo}/pulls?state=open&per_page=100')
       for p in prs:
         # Do not dispatch reviews for unrelated legacy PRs.
@@ -60,16 +60,33 @@ def snapshot(ctx):
                                         for x in checks['check_runs']]),
                       'status': status['state']})
       runs = ctx.api(f'https://api.github.com/repos/{repo}/actions/runs?branch=main&per_page=5')
-      runs_all.extend([(repo, x['id'], x['head_sha'], x['status'], x['conclusion'])
-                       for x in runs['workflow_runs']])
+      runs_all = [(repo, x['id'], x['head_sha'], x['status'], x['conclusion'])
+                  for x in runs['workflow_runs']]
+      return pulls, runs_all
+    pulls, runs_all = [], []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for repo_pulls, repo_runs in pool.map(repo_state, ctx.cfg.get('repositories', [ctx.repo])):
+            pulls.extend(repo_pulls)
+            runs_all.extend(repo_runs)
     inbox = ctx.state / 'inbox.json'
     replies = []
     if inbox.exists():
         issue = json.loads(inbox.read_text())
         replies = ctx.api(f'https://api.github.com/repos/{ctx.cfg.get("notification_repo", ctx.repo)}/issues/{issue["number"]}/comments?per_page=100')
+    worker_path = ctx.state / 'workers.json'
+    workers = json.loads(worker_path.read_text()) if worker_path.exists() else {}
+    worker_states = []
+    for run, worker in workers.items():
+        info = oc('get', f'/api/session/{worker["session"]}')['data']
+        worker_states.append({'run': run, 'session': worker['session'],
+                              'repository': worker['repository'], 'issue': worker['issue'],
+                              'admitted': worker.get('admitted'),
+                              'terminal': bool(info.get('time', {}).get('idle')),
+                              'outcome': info.get('outcome')})
     return {'cards': sorted(cards, key=lambda x: x['id']),
             'pulls': sorted(pulls, key=lambda x: (x['repository'], x['number'])),
             'runs': runs_all,
+            'workers': worker_states,
             'owner_replies': [{'id': c['id'], 'body': c['body']} for c in replies
                               if c['user']['login'] == ctx.cfg['project']['owner']],
             'releases': receipts(ctx)}
@@ -218,6 +235,8 @@ def main():
         return
     path = ctx.state / 'supervisor.json'
     state = json.loads(path.read_text()) if path.exists() else {}
+    errors = 0
+    print(f'supervisor started for {ctx.cfg["name"]}; polling {ctx.cfg.get("poll_seconds", 20)}s', flush=True)
     while True:
         try:
             # A crash before prompt acknowledgement is ambiguous. Pause rather
@@ -226,6 +245,7 @@ def main():
                 state['paused'] = True
                 raise RuntimeError('unacknowledged admission: inspect session inbox before recovery')
             state = step(ctx, state)
+            errors = 0
             save(path, state)
             save(ctx.state / 'health.json', {'ok': True, 'at': time.time(), 'paused': state.get('paused', False)})
         except Exception as exc:
@@ -233,6 +253,15 @@ def main():
             print(f'supervisor error: {type(exc).__name__}: {str(exc)[:180]}', flush=True)
             save(path, state)
             save(ctx.state / 'health.json', {'ok': False, 'at': time.time(), 'error': type(exc).__name__})
+            errors += 1
+            if errors == 3:
+                event = {'id': f'supervisor-error-{int(time.time() // 3600)}', 'kind': 'blocked',
+                         'message': 'Project runner cannot reconcile GitHub/OpenCode after three attempts. Check service health; no new work has been dispatched.'}
+                ui_notify(event)
+                try:
+                    notify(ctx, event)
+                except Exception:
+                    print('durable notification unavailable; OpenChamber delivery attempted', flush=True)
             if args.once:
                 raise
         if args.once:

@@ -2,6 +2,8 @@
 """Fail-closed exact-SHA merge gate. No model determines CI success here."""
 import argparse
 import json
+import os
+import subprocess
 from tick import ROOT, Ctx
 
 
@@ -52,6 +54,21 @@ def main():
         page += 1
     status = ctx.api(f'{base}/commits/{sha}/status')
     validate(review, pr, checks, status)
+    checker = cfg.get('coordination_checker')
+    if not checker:
+        raise ValueError('coordination checker not configured')
+    checker_dir = os.path.dirname(checker)
+    pin = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=checker_dir,
+                         capture_output=True, text=True, check=True).stdout.strip()
+    if pin != cfg.get('coordination_checker_sha'):
+        raise ValueError('coordination checker pin changed')
+    result = subprocess.run(['node', checker, 'check', '--repository', ctx.repo,
+                             '--pr', str(pr['number'])],
+                            cwd=checker_dir,
+                            env={**os.environ, 'GH_TOKEN': ctx.tok},
+                            capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise ValueError('coordination checker refused merge; inspect its sanitized output separately')
     result = ctx.api(f'{base}/pulls/{pr["number"]}/merge', 'PUT',
                      {'sha': sha, 'merge_method': 'squash'})
     if not result.get('merged'):
