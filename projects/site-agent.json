@@ -1,0 +1,16 @@
+{
+  "name": "site-agent",
+  "project": { "owner": "weareheadless", "number": 3 },
+  "repo": "weareheadless/site-agent",
+  "contract": { "repository": "weareheadless/crawlseo" },
+  "baseline_branch": "main",
+  "branch_prefix": "codex/",
+  "worktree_root": "/home/admin/releases",
+  "scope": ["src/**", "tests/**", "docs/**"],
+  "max_dispatch": 3,
+  "max_tick_seconds": 5400,
+  "token": {
+    "file": "/SOCIAL/configs/github.env",
+    "key": "GITHUB_PROJECTS_TOKEN"
+  }
+}
