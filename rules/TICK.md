@@ -52,6 +52,36 @@ management intent across fresh contexts; it is not a transcript or a command lis
 Write last-run.md and a short final report. Avoid no-progress sessions: retain a
 specific wake condition when everything useful is externally blocked.
 
+## Outcome ownership and independent acceptance
+
+Keep each original request owned through live acceptance. Subtasks are delivery
+dependencies, not a way to declare the parent resolved early. Manage the durable
+record using `python3 runner/delivery.py --project <project> --proposal <file>`.
+Fields: repository, issue, request, owner_session, state, next_action, plus links
+to subtasks/evidence as appropriate. States merged/published/deployed are explicit
+intermediate milestones, never synonyms for completed owner requests.
+
+Before asserting Verified or parking an original request as Blocked, submit that
+state through delivery.py. It starts a fresh independent delivery-reviewer.
+Verified requires source_sha, live_url, deployment_receipt, acceptance_evidence.
+Blocked requires investigation (list of source/result/evidence), unavailable_resource,
+alternatives and the minimal owner_action. Investigation is part of the job:
+search authorized logs, project storage, run artifacts and deployed contracts
+before asking the owner for internal evidence. For UI056, investigate the Astrid
+Rincon intake; for UI055 retain parent ownership through pins, release and proof.
+
+When reviewer completion wakes you, read its verdict, address rejected evidence,
+and use `delivery.py --project <project> --apply repository#issue` only after an
+accepted verdict. Only then mark the board Verified/Blocked or emit corresponding
+owner claims. Pending review is not approval. The gate checks independent session
+identity, successful completion and the exact proposal hash. Never self-author a
+reviewer's verdict. Reviewer failures remain pending investigation, not accepted.
+
+Measure actual outcomes: original requests live-verified, substantiated blockers,
+and necessary owner interventions. Worker runs, merges and session-success counts
+are activity metrics, not evidence of owner value. At handoff, identify any parent
+whose implementation merged but whose requested deployed behavior is still absent.
+
 ## Owner notifications
 
 Write stable-ID events to `.tick/<project>/outbox/<id>.json`: id, kind, message.

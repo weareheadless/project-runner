@@ -31,6 +31,11 @@ def generate():
         data['permissions'] = [
             {'action': 'question', 'resource': '*', 'effect': 'deny'},
             {'action': 'subagent', 'resource': '*', 'effect': 'deny' if worker else 'allow'}]
+        if path.stem == 'delivery-reviewer':
+            data['permissions'] += [
+                {'action': 'subagent', 'resource': '*', 'effect': 'deny'},
+                {'action': 'edit', 'resource': '*', 'effect': 'deny'},
+                {'action': 'edit', 'resource': str(ROOT / '.tick/*/delivery-reviews/*'), 'effect': 'allow'}]
         agents[path.stem] = data
     out = ROOT / '.opencode' / 'opencode.json'
     out.parent.mkdir(exist_ok=True)

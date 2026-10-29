@@ -55,6 +55,23 @@ and recovery; discovery scripts do not impose a global merge-before-dispatch
 order. Blocked unrelated work must not starve independent high-priority tasks.
 Execution code retains capacity, ownership, quota and merge safety checks.
 
+## Outcome acceptance
+
+`runner/delivery.py` keeps original requests owned across implementation, merge,
+publication, deployment and verification. A published artifact is explicitly not
+a completed request. SOL records next actions and links dependent delivery work.
+Verified or blocked proposals start a fresh `delivery-reviewer` session; applying
+them requires that session to finish successfully with acceptance and evidence
+bound to the proposal hash. Rejected proposals stay pending and return actionable
+gaps. Blockers require recorded searches, results, evidence, alternatives and the
+specific owner action that cannot be automated. The supervisor observes review
+completion so SOL can continue without owner prompting.
+
+This is a workflow acceptance gate, not a GitHub security boundary: the shared
+GitHub credential can still edit the board outside this tool. Reviewer semantic
+quality and live delivery remain subject to end-to-end validation; unit tests
+prove rejection rules, not that an owner-visible feature works.
+
 ## Notifications
 
 SOL writes durable events under `.tick/site-agent/outbox/`. The supervisor

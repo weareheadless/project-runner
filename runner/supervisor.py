@@ -93,7 +93,16 @@ def snapshot(ctx):
                               'outcome': info.get('outcome')})
     if changed:
         save(worker_path, workers)
+    deliveries_path = ctx.state / 'deliveries.json'
+    deliveries = json.loads(deliveries_path.read_text()) if deliveries_path.exists() else {}
+    reviews = []
+    for key, delivery in deliveries.items():
+        if delivery.get('state') == 'reviewing':
+            info = oc('get', f'/api/session/{delivery["reviewer_session"]}')['data']
+            reviews.append({'delivery': key, 'session': delivery['reviewer_session'],
+                            'outcome': info.get('outcome'), 'idle': bool(info['time'].get('idle'))})
     return {'cards': sorted(cards, key=lambda x: x['id']),
+            'deliveries': deliveries, 'delivery_reviews': reviews,
             'pulls': sorted(pulls, key=lambda x: (x['repository'], x['number'])),
             'runs': runs_all,
             'workers': worker_states,
