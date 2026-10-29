@@ -506,9 +506,10 @@ def step(ctx, state):
     save(ctx.state / 'supervisor.json', state)
     oc('post', f'/api/session/{session["id"]}/prompt', {
         'text': f'Read {ROOT}/rules/TICK.md. Reconcile project {ctx.cfg["name"]}. '
+                f'Project mandate: {ROOT / ctx.cfg.get("goal_file", "rules/TICK.md")}. '
                 f'Configuration: {ROOT}/projects/{ctx.cfg["name"]}.json. '
                 f'Event snapshot: {ctx.state}/snapshot.json. '
-                'Process existing PRs/deployments/test replies first, then ready work. '
+                'Recover the management handoff and choose actions that advance the project goal. '
                 + ('The previous session was closed by an OpenAI account switch; its branch and claim '
                    'state is authoritative, so inspect before re-dispatching anything. '
                    if state.pop('resume_after_switch', False) else '')

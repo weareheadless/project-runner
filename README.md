@@ -46,6 +46,15 @@ Product-specific judgement/release queue operations are executed by SOL under
 `rules/TICK.md`, not secretly inferred by the Python watcher. These require live
 end-to-end validation; passing supervisor tests does not prove a product release.
 
+## Project management
+
+`projects/site-agent-goal.md` is SOL's stable mandate: integrated outcome,
+authority, evidence expectations and escalation boundaries. The board and a
+concise strategy/decision handoff supply current context. SOL chooses priorities
+and recovery; discovery scripts do not impose a global merge-before-dispatch
+order. Blocked unrelated work must not starve independent high-priority tasks.
+Execution code retains capacity, ownership, quota and merge safety checks.
+
 ## Notifications
 
 SOL writes durable events under `.tick/site-agent/outbox/`. The supervisor

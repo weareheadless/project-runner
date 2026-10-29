@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Deterministic work queue: finish, repair, adopt, then dispatch.
+"""Advisory inventory of PRs, branches and candidate tasks.
 
-Read-only. Gives one ordered list so a pass never starts new work while an owned
-PR could be merged or repaired. Prose rules alone did not stop that.
+Read-only. Categories are discovery hints, not required ordering or proof of
+ownership, review acceptance, mergeability or root cause. SOL decides priorities.
 """
 import argparse
 import json
@@ -104,17 +104,17 @@ def main():
         for row in rows[:10]:
             print('  ' + fmt(row))
 
-    show('1. MERGE — green, finish these first', queue['merge'],
+    show('GREEN CHECKS — still needs ownership and acceptance review', queue['merge'],
          lambda r: f'#{r["pr"]} {r["repository"].split("/")[-1]} {r["sha"][:8]} '
                    f'{"draft" if r["draft"] else "ready"} {r["title"][:50]}')
-    show('2. REPAIR — fix the PR body, do not restart', queue['repair'],
+    show('FAILED CHECKS — inspect diagnostics before deciding repair', queue['repair'],
          lambda r: f'#{r["pr"]} {r["repository"].split("/")[-1]} failed={", ".join(r["failed"])[:60]}')
     show('3. CLOSED UNMERGED — read why it was closed before reopening', queue['reopen'],
          lambda r: f'#{r["pr"]} {r["repository"].split("/")[-1]} {r["closed_at"]} '
                    f'by {r["closer"]} {r["title"][:44]}')
     show('4. ADOPT — branch with no PR', queue['adopt'],
          lambda r: f'{r["repository"].split("/")[-1]} {r["branch"]}')
-    show('5. DISPATCH — only if 1-4 are empty', queue['dispatch'],
+    show('READY CANDIDATES — assess dependencies and available capacity', queue['dispatch'],
          lambda r: f'#{r["issue"]} {r["workId"]} {r["priority"]} {r["title"][:44]}')
 
 

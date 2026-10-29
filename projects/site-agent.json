@@ -1,5 +1,6 @@
 {
   "name": "site-agent",
+  "goal_file": "projects/site-agent-goal.md",
   "project": {
     "owner": "weareheadless",
     "number": 3
