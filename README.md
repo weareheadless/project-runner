@@ -12,6 +12,37 @@ An unattended GitHub Project supervisor. No model runs while the project is idle
 GitHub remains the work/evidence ledger; each SOL reconciliation gets a new
 OpenCode session, and Luna workers have separate sessions and worktrees.
 
+## Deploy
+
+The checkout **is** the deployment. systemd runs `runner/supervisor.py` from this
+directory, so whatever is on disk is what runs after a restart. There is no
+release pipeline and no artifact to promote for this repository.
+
+```sh
+./deploy.sh              # install agents/rules, record, restart, verify
+./deploy.sh --check      # non-zero when what runs differs from the checkout
+./deploy.sh --status     # what is running, as JSON
+```
+
+`deploy.sh` runs `install.sh` (agent definitions into `~/.config/opencode/agents`,
+`LUNA-RULES.md` into `/tmp/opencode`), restarts the user service, waits for it to
+be active, and writes `.tick/<project>/deploy.json`: source SHA, branch, whether
+the tree was dirty, the changed paths, and the service start time.
+
+Three consequences, stated here so they are not guessed at:
+
+- **Merging does not deploy.** A merged PR changes `main`; it changes nothing that
+  is running until someone deploys.
+- **Deploying does not require a merge.** Uncommitted work in the tree is live
+  after a restart. The receipt records it as `dirty` with its paths, and
+  `--check` reports a dirty tree as *not current* rather than pretending.
+- **A crash or restart deploys by accident.** `Restart=on-failure` reloads
+  whatever is on disk. If a change must not go live, it must not sit in the
+  working tree.
+
+`--check` compares the recorded SHA and dirty set with the checkout, the service
+state, and the last recorded restart, so "is it deployed?" has one answer.
+
 ## Run
 
 ```sh
