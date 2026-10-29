@@ -191,19 +191,35 @@ def quota_failures(ctx, state, exclude=()):
     path = ctx.state / 'workers.json'
     if path.exists():
         sessions.extend(w['session'] for w in json.loads(path.read_text()).values())
-    failures = []
+    ledger = {}
+    if path.exists():
+        ledger = json.loads(path.read_text())
+    failures, finished = [], False
     for sid in dict.fromkeys(sessions):
         if sid in exclude:
             continue
+        info = oc('get', f'/api/session/{sid}')['data']
         messages = oc('get', f'/api/session/{sid}/message?limit=6&order=desc')['data']
+        hit = None
         for m in messages:
             if m['type'] == 'user':
                 break
-            error = m.get('error') or m.get('retry', {}).get('error')
+            error = m.get('error') or (m.get('retry') or {}).get('error')
             marker = sid + ':' + m['id']
             if error and marker not in state.get('quota_seen', []) and quota_error(error):
-                failures.append((sid, marker, error))
+                hit = (sid, marker, error)
                 break
+        if hit:
+            failures.append(hit)
+        elif info.get('time', {}).get('idle'):
+            # Keep the ledger truthful while suspended, so status and capacity
+            # are not blocked by sessions that finished before the cooldown.
+            for worker in ledger.values():
+                if worker['session'] == sid and not worker.get('terminal'):
+                    worker['terminal'], worker['outcome'] = True, info.get('outcome')
+                    finished = True
+    if finished:
+        save(path, ledger)
     return failures
 
 

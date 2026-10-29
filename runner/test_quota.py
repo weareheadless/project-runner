@@ -47,6 +47,24 @@ class QuotaParsingTests(unittest.TestCase):
         self.assertFalse(suspension({'reset_at': 900}, 1000, 1)['explicit_reset'])
 
 
+def make_oc(infos=None, messages=None):
+    """Path-based stub: session info, session messages, or an empty success."""
+    infos, messages = infos or {}, messages or {}
+
+    def fake(method, path, body=None):
+        parts = path.split('/')
+        if path.endswith('/message?limit=6&order=desc'):
+            return {'data': messages.get(parts[3], [])}
+        if path.startswith('/api/session/'):
+            return {'data': infos.get(parts[3], {'time': {'idle': 1}})}
+        return {}
+    return fake
+
+
+QUOTA_ERROR = {'type': 'provider.quota', 'message': 'The usage limit has been reached',
+               'response': {'body': '{"error":{"resets_at":9000}}'}}
+
+
 class QuotaLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -55,61 +73,71 @@ class QuotaLifecycleTests(unittest.TestCase):
         self.ctx.state = Path(self.tmp.name)
         self.ctx.cfg = {}
 
-    @patch.object(s, 'ui_notify')
-    @patch.object(s, 'oc')
-    @patch.object(s.time, 'time', return_value=1000)
-    def test_suspends_and_notifies_once(self, clock, oc, ui):
-        oc.side_effect = [{'data': [{'id': 'msg_failed', 'type': 'idle',
-            'error': {'type': 'usage_limit_reached', 'message': 'quota', 'retryAfterMs': 60000}}]},
-            {'data': {'time': {'idle': 1000}}}]
-        state = {'active': {'id': 'ses_quota', 'started': 900}}
-        self.assertTrue(s.quota_check(self.ctx, state))
-        self.assertEqual(state['quota']['until'], 1075)
-        self.assertFalse(state.get('paused', False))
-        self.assertEqual(len(list((self.ctx.state/'outbox').glob('*.json'))), 1)
-        count = oc.call_count
-        self.assertTrue(s.quota_check(self.ctx, state))
-        self.assertEqual(oc.call_count, count)
-        ui.assert_called_once()
+    def run_check(self, state, infos=None, messages=None):
+        oc = Mock(side_effect=make_oc(infos, messages))
+        with patch.object(s, 'oc', oc), patch.object(s, 'ui_notify'), \
+             patch.object(s, 'notify') as notify, patch.object(s.time, 'time', return_value=1000):
+            result = s.quota_check(self.ctx, state)
+        return result, oc, notify
 
-    @patch.object(s, 'oc')
-    @patch.object(s.time, 'time', return_value=1100)
-    def test_reset_resumes_same_session_not_new_worker(self, clock, oc):
+    def test_suspends_and_notifies_once(self):
+        state = {'active': {'id': 'ses_quota', 'started': 900}}
+        messages = {'ses_quota': [{'id': 'msg_failed', 'type': 'idle', 'error': QUOTA_ERROR}]}
+        ok, oc, notify = self.run_check(state, messages=messages)
+        self.assertTrue(ok)
+        self.assertEqual(state['quota']['until'], 9015)  # provider reset + 15s margin
+        self.assertFalse(state.get('paused', False))
+        self.assertEqual(state['quota_notified'], 'ses_quota:msg_failed')
+        self.assertEqual(len(list((self.ctx.state / 'outbox').glob('*.json'))), 1)
+        calls = oc.call_count
+        self.assertTrue(self.run_check(state, messages=messages)[0])
+        self.assertEqual(oc.call_count, calls)  # no model probes while parked
+
+    def test_reset_resumes_same_session(self):
         state = {'quota': {'until': 1075, 'sessions': ['ses_worker'], 'markers': ['ses_worker:msg']}}
-        oc.side_effect = [{'data': {'time': {'idle': 1000}, 'outcome': 'failed'}}, {}]
-        self.assertTrue(s.quota_check(self.ctx, state))
+        oc = Mock(side_effect=make_oc({'ses_worker': {'time': {'idle': 1000}, 'outcome': 'failed'}}))
+        with patch.object(s, 'oc', oc), patch.object(s.time, 'time', return_value=1100):
+            self.assertTrue(s.quota_check(self.ctx, state))
         self.assertNotIn('quota', state)
         self.assertEqual(oc.call_args.args[:2], ('post', '/api/session/ses_worker/prompt'))
         self.assertIn('ses_worker:msg', state['quota_seen'])
 
-    @patch.object(s, 'oc')
-    @patch.object(s.time, 'time', return_value=1100)
-    def test_ambiguous_resume_pauses_instead_of_double_prompt(self, clock, oc):
-        state = {'quota': {'until': 1075, 'resuming': True, 'sessions': ['ses_worker']}}
-        self.assertTrue(s.quota_check(self.ctx, state))
+    def test_ambiguous_resume_pauses_instead_of_double_prompt(self):
+        state = {'quota': {'until': 900, 'resuming': True, 'sessions': ['ses_worker']}}
+        ok, oc, _ = self.run_check(state)
+        self.assertTrue(ok)
         self.assertTrue(state['paused'])
         oc.assert_not_called()
 
-    @patch.object(s, 'oc')
-    def test_unrelated_pause_is_not_cleared(self, oc):
+    def test_unrelated_pause_is_not_cleared(self):
         state = {'paused': True}
-        self.assertFalse(s.quota_check(self.ctx, state))
+        ok, oc, _ = self.run_check(state)
+        self.assertFalse(ok)
         self.assertTrue(state['paused'])
         oc.assert_not_called()
 
-    @patch.object(s, 'oc')
-    def test_old_error_before_new_user_input_ignored(self, oc):
+    def test_old_error_before_new_user_input_ignored(self):
         state = {'active': {'id': 'ses_work'}}
-        oc.return_value = {'data': [{'type': 'user', 'id': 'new'},
-            {'id': 'old', 'type': 'idle', 'error': {'type': 'usage_limit_reached', 'message': 'quota'}}]}
-        self.assertFalse(s.quota_check(self.ctx, state))
+        messages = {'ses_work': [{'type': 'user', 'id': 'new'},
+                                 {'id': 'old', 'type': 'idle', 'error': QUOTA_ERROR}]}
+        ok, _, _ = self.run_check(state, messages=messages)
+        self.assertFalse(ok)
+        self.assertNotIn('quota', state)
 
-    @patch.object(s, 'oc')
-    def test_worker_failure_is_detected_without_coordinator(self, oc):
-        (self.ctx.state/'workers.json').write_text(json.dumps({'run': {'session': 'ses_worker'}}))
-        oc.return_value = {'data': []}
-        self.assertFalse(s.quota_check(self.ctx, {}))
-        self.assertIn('ses_worker/message', oc.call_args.args[1])
+    def test_worker_failure_detected_without_coordinator(self):
+        (self.ctx.state / 'workers.json').write_text(json.dumps({'run': {'session': 'ses_worker'}}))
+        messages = {'ses_worker': [{'id': 'm1', 'type': 'idle', 'error': QUOTA_ERROR}]}
+        ok, _, _ = self.run_check({}, messages=messages)
+        self.assertTrue(ok)
+
+    def test_finished_worker_marked_terminal_while_suspended(self):
+        (self.ctx.state / 'workers.json').write_text(json.dumps(
+            {'run': {'session': 'ses_done', 'terminal': False, 'issue': 1}}))
+        state = {'quota': {'until': 2000, 'attempt': 1, 'explicit_reset': True,
+                           'sessions': ['ses_other'], 'markers': []}}
+        self.run_check(state, infos={'ses_done': {'time': {'idle': 5}, 'outcome': 'succeeded'}})
+        ledger = json.loads((self.ctx.state / 'workers.json').read_text())
+        self.assertTrue(ledger['run']['terminal'])
 
 
 class QuotaNotificationTests(unittest.TestCase):
@@ -124,13 +152,12 @@ class QuotaNotificationTests(unittest.TestCase):
     @patch.object(s, 'oc')
     @patch.object(s.time, 'time', return_value=5000)
     def test_new_episode_renotifies_after_earlier_alert(self, clock, oc, ui):
-        oc.side_effect = [{'data': [{'id': 'msg_new', 'type': 'idle',
-            'error': {'type': 'provider.quota', 'message': 'The usage limit has been reached'}}]},
-            {'data': {'time': {'idle': 1}}}]
+        oc.side_effect = make_oc(messages={'ses_a': [
+            {'id': 'msg_new', 'type': 'idle', 'error': QUOTA_ERROR}]})
         state = {'active': {'id': 'ses_a', 'started': 1000}, 'quota_notified': 'ses_old:msg_old'}
         self.assertTrue(s.quota_check(self.ctx, state))
         self.assertEqual(state['quota_notified'], 'ses_a:msg_new')
-        self.assertEqual(len(list((self.ctx.state/'outbox').glob('*.json'))), 1)
+        self.assertEqual(len(list((self.ctx.state / 'outbox').glob('*.json'))), 1)
         ui.assert_called_once()
 
     @patch.object(s, 'oc')
