@@ -63,6 +63,14 @@ state commands, prerequisites, evidence and coverage gaps; paid runs still requi
 an owned test target and authorization. The owner actor defaults to OpenAI Luna
 through the runner's existing OpenCode authentication, not OpenRouter.
 
+Use `python3 runner/run_test.py --project site-agent --test intake-surface
+--checkout /path/to/reviewed/site-agent` for deterministic runs. An authorized
+live harness run passes `--runner-results-dir <runner>/.tick/site-agent/test-results`.
+The supervisor files a deduplicated GitHub issue when queued results fail, cannot
+execute, or contain invalid evidence, including during provider cooldowns. It
+retains private diagnostics locally, adds the issue to the Project, and retries
+publication outages. Discovery/reporting never authorizes paid tests or teardown.
+
 `projects/site-agent-goal.md` is SOL's stable mandate: integrated outcome,
 authority, evidence expectations and escalation boundaries. The board and a
 concise strategy/decision handoff supply current context. SOL chooses priorities

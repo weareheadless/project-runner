@@ -66,6 +66,17 @@ or deciding verification for a relevant diff. Discover by issue or changed path:
 src/site_agent/web/intake_lab.py`). The catalogue names commands, prerequisites,
 evidence and explicit coverage gaps; it is not an automatic paid-test scheduler.
 
+Run deterministic tests through `python3 runner/run_test.py --project site-agent
+--test intake-surface --checkout <reviewed-checkout>`. This pins the Python import,
+keeps private command output and queues a durable result. For an authorized live
+flow, pass the harness `--runner-results-dir .tick/site-agent/test-results` using
+an absolute path rooted at this runner checkout. The supervisor consumes that
+queue even during model quota cooldowns: failed tests, unavailable execution and
+malformed evidence open or reuse a fingerprinted GitHub issue on the Project.
+Repeated failures do not create another issue; a closed matching issue reopens.
+Publication outages retain receipts and back off instead of dropping evidence.
+Do not call bare pytest for a required validation and omit its result receipt.
+
 Use the cheap deterministic test first, then an authorized bounded live flow if
 it addresses the broken boundary. The test owner uses `openai/gpt-6-luna` through
 the existing OpenCode OpenAI authentication, not OpenRouter or a copied OAuth
