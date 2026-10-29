@@ -56,6 +56,13 @@ end-to-end validation; passing supervisor tests does not prove a product release
 
 ## Project management
 
+Available browser/regression tests are indexed in `projects/site-agent-tests.json`.
+Run `python3 runner/test_catalog.py --project site-agent --issue 458` or filter
+with `--path src/site_agent/web/intake_lab.py`. Discovery is read-only: entries
+state commands, prerequisites, evidence and coverage gaps; paid runs still require
+an owned test target and authorization. The owner actor defaults to OpenAI Luna
+through the runner's existing OpenCode authentication, not OpenRouter.
+
 `projects/site-agent-goal.md` is SOL's stable mandate: integrated outcome,
 authority, evidence expectations and escalation boundaries. The board and a
 concise strategy/decision handoff supply current context. SOL chooses priorities
