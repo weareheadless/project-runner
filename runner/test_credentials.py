@@ -100,7 +100,7 @@ class FailoverTests(unittest.TestCase):
         return [credential('cred_a', False), credential('cred_b', True, TOKEN_B)]
 
     def test_switches_to_spare_account_and_resumes_promptly(self):
-        state = {'active': {'id': 'ses_work', 'started': 900}}
+        state = {'active': {'id': 'ses_work', 'started': 900}, 'session_credentials': {'ses_work': 'cred_b'}}
         messages = {'ses_work': [{'id': 'm1', 'type': 'idle', 'error': QUOTA_ERROR}]}
         ok, oc = self.run_check(state, self.two_accounts(), messages)
         self.assertTrue(ok)
@@ -112,7 +112,7 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(len(list((self.ctx.state / 'outbox').glob('quota-switch-*.json'))), 1)
 
     def test_both_dry_waits_for_earliest_reset(self):
-        state = {'active': {'id': 'ses_work', 'started': 900},
+        state = {'active': {'id': 'ses_work', 'started': 900}, 'session_credentials': {'ses_work': 'cred_b'},
                  'credentials': {'cred_a': {'exhausted_until': 5000}}}
         messages = {'ses_work': [{'id': 'm1', 'type': 'idle', 'error': QUOTA_ERROR}]}
         ok, oc = self.run_check(state, self.two_accounts(), messages)
@@ -191,7 +191,7 @@ class AuthFailoverTests(unittest.TestCase):
                                   'error': {'type': 'provider.auth', 'status': 401,
                                             'response': {'body': '{"error":{"code":"no_matching_rule"}}'}}}]}
         oc = Mock(side_effect=make_oc(creds, {}, messages))
-        state = {'active': {'id': 'ses_work', 'started': 900}}
+        state = {'active': {'id': 'ses_work', 'started': 900}, 'session_credentials': {'ses_work':'cred_b'}}
         with patch.object(s, 'oc', oc), patch.object(s.time, 'time', return_value=1000):
             self.assertTrue(s.quota_check(self.ctx, state))
         self.assertFalse(state.get('paused', False))

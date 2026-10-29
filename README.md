@@ -1,5 +1,13 @@
 # Project runner
 
+Quota availability: during a cooldown, the runner now performs bounded fresh,
+tool-disabled availability probes, at most once per credential per five minutes.
+Successful requests override stale local exhaustion records immediately. Only
+failed fresh quota responses extend an account's cooldown; network errors do not.
+Session credential IDs are recorded at admission so old failures cannot poison
+whichever account happens to be active later. Unknown historical identity is not
+guessed. Account rotation remains host-global; probes defer while owned work runs.
+
 An unattended GitHub Project supervisor. No model runs while the project is idle.
 GitHub remains the work/evidence ledger; each SOL reconciliation gets a new
 OpenCode session, and Luna workers have separate sessions and worktrees.

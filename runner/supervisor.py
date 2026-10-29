@@ -18,6 +18,7 @@ from pathlib import Path
 
 from tick import ROOT, Ctx, board, fields
 import credentials
+import availability
 from quota import quota_error, suspension
 
 
@@ -307,8 +308,10 @@ def handle_auth(ctx, state, failures, now):
     listed = credentials.accounts(oc) if ctx.cfg.get('credential_failover', True) else []
     current = next((c for c in listed if c['active']), None)
     until = now + ctx.cfg.get('credential_broken_seconds', 3600)
-    if current:
-        credentials.mark_broken(state, current['id'], until, failures[0][2])
+    for _, sid, marker, _ in failures:
+        credential_id = state.get('session_credentials', {}).get(sid)
+        if credential_id:
+            credentials.mark_broken(state, credential_id, until, marker)
     target = credentials.choose(state, listed, now) if len(listed) > 1 else None
     if target:
         changed = False
@@ -347,6 +350,8 @@ def quota_check(ctx, state):
             return handle_auth(ctx, state, auth, now)
     hold = state.get('quota')
     if hold:
+        if availability.check(ctx, state, oc, save, now):
+            return True
         prefer_credential(ctx, state, hold, now)
         if now < hold['until']:
             # Catch workers that hit the same exhausted account a few seconds
@@ -420,9 +425,18 @@ def quota_check(ctx, state):
     hold.update(sessions=[sid for sid, _, _ in failures], markers=[m for _, m, _ in failures])
     listed = credentials.accounts(oc) if ctx.cfg.get('credential_failover', True) else []
     current = next((c for c in listed if c['active']), None)
-    if current:
-        credentials.mark_exhausted(state, current['id'], hold['until'], hold['markers'][0])
-        hold['exhausted_credential'] = current['id']
+    bindings = state.get('session_credentials', {})
+    worker_path = ctx.state / 'workers.json'
+    if worker_path.exists():
+        bindings = dict(bindings)
+        bindings.update({w['session']: w['credential_id']
+                         for w in json.loads(worker_path.read_text()).values() if w.get('credential_id')})
+    for (sid, marker, error), timer in zip(failures, timers):
+        credential_id = bindings.get(sid)
+        if credential_id:
+            credentials.mark_exhausted(state, credential_id, timer['until'], marker)
+            hold['exhausted_credential'] = credential_id
+    # Never infer that the currently active credential produced an old error.
     # Stop an internal provider retry loop before parking it; only affected
     # sessions are interrupted, never unrelated workers that are making progress.
     for sid in hold['sessions']:
@@ -513,13 +527,16 @@ def step(ctx, state):
         return state
     # Validate installed agent before creating sessions.
     oc('get', '/api/agent/sol-tick')
+    credential_id = next((c['id'] for c in credentials.accounts(oc) if c['active']), None) if ctx.cfg.get('credential_failover') else None
     session = oc('post', '/api/session', {
         'title': 'Project runner — reconcile', 'agent': 'sol-tick',
         'model': ctx.cfg['orchestrator_model'],
         'location': {'directory': str(ROOT)}})['data']
     # Persist before prompt: restart must recover this session, never duplicate it.
     state.update(active={'id': session['id'], 'started': time.time(), 'admitted': False},
-                 fingerprint=fingerprint)
+                  fingerprint=fingerprint)
+    if credential_id:
+        state.setdefault('session_credentials', {})[session['id']] = credential_id
     save(ctx.state / 'supervisor.json', state)
     oc('post', f'/api/session/{session["id"]}/prompt', {
         'text': f'Read {ROOT}/rules/TICK.md. Reconcile project {ctx.cfg["name"]}. '

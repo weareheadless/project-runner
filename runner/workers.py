@@ -37,10 +37,13 @@ def start(ctx, plan, brief, effort):
     agent = {'low': 'luna-worker', 'medium': 'luna-worker-med', 'high': 'luna-worker-high'}[effort]
     # Resolve agent before creating a session, so a missing installation is visible.
     oc('get', f'/api/agent/{agent}')
+    import credentials
+    credential_id = next((c['id'] for c in credentials.accounts(oc) if c['active']), None) if ctx.cfg.get('credential_failover') else None
     session = oc('post', '/api/session', {'title': f'{plan["agentRun"]} — {effort}',
         'agent': agent, 'model': {'providerID': 'openai', 'id': 'gpt-6-luna', 'variant': effort},
         'location': {'directory': str(ROOT)}})['data']
     record = dict(session=session['id'], repository=plan['repository'], issue=plan['issueNumber'],
+                  credential_id=credential_id,
                   effort=effort, terminal=False, started=time.time(), admitted=False)
     ledger[plan['agentRun']] = record
     save(path, ledger)

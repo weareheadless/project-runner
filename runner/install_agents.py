@@ -36,6 +36,8 @@ def generate():
                 {'action': 'subagent', 'resource': '*', 'effect': 'deny'},
                 {'action': 'edit', 'resource': '*', 'effect': 'deny'},
                 {'action': 'edit', 'resource': str(ROOT / '.tick/*/delivery-reviews/*'), 'effect': 'allow'}]
+        if path.stem == 'quota-probe':
+            data['permissions'] = [{'action': '*', 'resource': '*', 'effect': 'deny'}]
         agents[path.stem] = data
     out = ROOT / '.opencode' / 'opencode.json'
     out.parent.mkdir(exist_ok=True)

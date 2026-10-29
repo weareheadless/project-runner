@@ -1,5 +1,7 @@
 {
   "name": "site-agent",
+  "availability_checks": true,
+  "availability_interval_seconds": 300,
   "goal_file": "projects/site-agent-goal.md",
   "project": {
     "owner": "weareheadless",
