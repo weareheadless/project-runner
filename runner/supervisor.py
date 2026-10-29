@@ -20,6 +20,7 @@ from tick import ROOT, Ctx, board, fields
 import credentials
 import availability
 import test_results
+import release_gap
 from quota import quota_error, suspension
 
 
@@ -523,6 +524,7 @@ def step(ctx, state):
     if test_reports['processed'] or test_reports['errors']:
         save(ctx.state / 'test-report-health.json', test_reports)
     process_outbox(ctx)
+    release_gap.step(ctx, state, time.time())
     if quota_check(ctx, state):
         return state
     current = snapshot(ctx)
