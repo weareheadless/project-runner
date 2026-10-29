@@ -83,6 +83,15 @@ repositories; production currently serves as the development/test environment.
 This is not authorization to publish arbitrary customer changes, migrate data,
 change host policy or deploy unrelated repositories.
 
+**Never close an owned PR.** There are exactly three outcomes for a PR this
+initiative owns: merged, left open with a recorded blocker, or repaired and then
+merged. Closing it unmerged is not one of them — it destroys the branch's review
+history and forces the next pass to rebuild the same work under a new run ID.
+If the work is wrong, leave the PR open, write what is wrong in a comment, and
+either dispatch the fix to the same branch or record a blocker notification.
+`gh pr close`, `PATCH /pulls` with `state: closed`, and branch deletion of an
+owned branch are all forbidden unless a human explicitly asked for them.
+
 A PR is mergeable when it is not a draft, every required check on the current
 head is `success`, and the diff matches the brief. Mark a green draft ready
 rather than leaving it as a draft; a green draft nobody merges is the most

@@ -161,3 +161,26 @@ class SupervisorTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PrClosureTests(unittest.TestCase):
+    def setUp(self):
+        self.ctx = Mock()
+        self.ctx.api.return_value = {'state': 'closed', 'merged_at': None, 'title': 'x'}
+
+    def test_closed_unmerged_is_reported(self):
+        state = {'open_prs': [['o/r', 7]]}
+        events = s.check_pr_closures(self.ctx, state, {'pulls': []})
+        self.assertEqual([e['id'] for e in events], ['pr-closed-o-r-7'])
+        self.assertEqual(state['open_prs'], [])
+
+    def test_merged_pr_is_not_reported(self):
+        self.ctx.api.return_value = {'state': 'closed', 'merged_at': '2026-01-01', 'title': 'x'}
+        state = {'open_prs': [['o/r', 7]]}
+        self.assertEqual(s.check_pr_closures(self.ctx, state, {'pulls': []}), [])
+
+    def test_still_open_is_not_reported(self):
+        state = {'open_prs': [['o/r', 7]]}
+        current = {'pulls': [{'repository': 'o/r', 'number': 7}]}
+        self.assertEqual(s.check_pr_closures(self.ctx, state, current), [])
+        self.assertEqual(state['open_prs'], [['o/r', 7]])

@@ -439,11 +439,36 @@ def quota_check(ctx, state):
     return True
 
 
+def check_pr_closures(ctx, state, current):
+    """Alarm when an owned PR disappears without being merged."""
+    previous = {tuple(item) for item in state.get('open_prs', [])}
+    open_now = {(pull['repository'], pull['number']) for pull in current['pulls']}
+    events = []
+    for repo, number in sorted(previous - open_now):
+        try:
+            pull = ctx.api(f'https://api.github.com/repos/{repo}/pulls/{number}')
+        except Exception:
+            continue
+        if pull.get('state') == 'closed' and not pull.get('merged_at'):
+            events.append({'id': f'pr-closed-{repo.replace("/", "-")}-{number}',
+                           'kind': 'blocked',
+                           'message': f'PR #{number} in {repo} was closed without merging '
+                                      f'({pull.get("title", "")[:60]}). Reopen it or repair the same '
+                                      f'branch; do not start a new run for that issue.'})
+    state['open_prs'] = sorted([list(item) for item in open_now])
+    return events
+
+
 def step(ctx, state):
     process_outbox(ctx)
     if quota_check(ctx, state):
         return state
     current = snapshot(ctx)
+    for event in check_pr_closures(ctx, state, current):
+        outbox = ctx.state / 'outbox'
+        outbox.mkdir(exist_ok=True)
+        save(outbox / (event['id'] + '.json'), event)
+        ui_notify(event)
     fingerprint = digest(current)
     save(ctx.state / 'snapshot.json', current)
     active = state.get('active')
