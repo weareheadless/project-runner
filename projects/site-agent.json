@@ -34,7 +34,16 @@
     "id": "gpt-6.1-sol",
     "variant": "medium"
   },
-  "repositories": ["weareheadless/site-agent", "weareheadless/crawlseo", "weareheadless/helloada", "weareheadless/wix-site-bridge"],
-  "receipt_roots": ["/SOCIAL/payload-releases/runs/api", "/SOCIAL/payload-releases/runs/helloada-app"],
-  "notification_repo": "weareheadless/project-runner"
+  "repositories": [
+    "weareheadless/site-agent",
+    "weareheadless/crawlseo",
+    "weareheadless/helloada",
+    "weareheadless/wix-site-bridge"
+  ],
+  "receipt_roots": [
+    "/SOCIAL/payload-releases/runs/api",
+    "/SOCIAL/payload-releases/runs/helloada-app"
+  ],
+  "notification_repo": "weareheadless/project-runner",
+  "credential_failover": true
 }

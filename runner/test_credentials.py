@@ -129,8 +129,11 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(state['quota']['until'], 9015)
         self.assertFalse(any('/activate' in c.args[1] for c in oc.call_args_list))
 
-    def test_resume_activates_reset_account_when_needed(self):
-        state = {'quota': {'until': 900, 'attempt': 1, 'sessions': ['ses_work'],
+    def test_resume_after_account_switch_starts_fresh(self):
+        # A session opened under one account is refused when resumed under
+        # another, so a switch must never prompt the old session.
+        state = {'active': {'id': 'ses_work', 'started': 900},
+                 'quota': {'until': 900, 'attempt': 1, 'sessions': ['ses_work'],
                            'markers': ['ses_work:m1'], 'exhausted_credential': 'cred_b'},
                  'credentials': {'cred_b': {'exhausted_until': 5000}}}
         ok, oc = self.run_check(state, self.two_accounts(),
@@ -138,8 +141,18 @@ class FailoverTests(unittest.TestCase):
         self.assertTrue(ok)
         paths = [c.args[1] for c in oc.call_args_list]
         self.assertIn('/api/credential/cred_a/activate', paths)
-        self.assertLess(paths.index('/api/credential/cred_a/activate'),
-                        next(i for i, p in enumerate(paths) if p.endswith('/prompt')))
+        self.assertFalse(any(p.endswith('/prompt') for p in paths))
+        self.assertIsNone(state['active'])
+        self.assertTrue(state['resume_after_switch'])
+
+    def test_resume_without_switch_reuses_session(self):
+        state = {'active': {'id': 'ses_work', 'started': 900},
+                 'quota': {'until': 900, 'attempt': 1, 'sessions': ['ses_work'],
+                           'markers': ['ses_work:m1']}}
+        ok, oc = self.run_check(state, [credential('cred_b', True, TOKEN_B)],
+                                infos={'ses_work': {'time': {'idle': 1}, 'outcome': 'failed'}})
+        self.assertTrue(ok)
+        self.assertTrue(any(c.args[1].endswith('/prompt') for c in oc.call_args_list))
 
     def test_failover_disabled_keeps_waiting(self):
         self.ctx.cfg['credential_failover'] = False

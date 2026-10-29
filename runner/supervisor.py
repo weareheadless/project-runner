@@ -278,6 +278,7 @@ def prefer_credential(ctx, state, hold, now):
     # switch or a legacy hold), only shorten the wait; do not re-activate.
     if not target['active']:
         credentials.activate(oc, target['id'])
+        hold['credential_changed'] = True
         event = {'id': f'quota-switch-{hold["markers"][0]}-{target["id"]}',
                  'kind': 'quota-switched',
                  'message': f'OpenAI quota exhausted on one account; switched to credential '
@@ -301,9 +302,12 @@ def handle_auth(ctx, state, failures, now):
         credentials.mark_broken(state, current['id'], until, failures[0][2])
     target = credentials.choose(state, listed, now) if len(listed) > 1 else None
     if target:
+        changed = False
         if not target['active']:
             credentials.activate(oc, target['id'])
+            changed = True
         hold = {'until': now + ctx.cfg.get('credential_switch_settle', 15),
+                'credential_changed': changed,
                 'attempt': state.get('quota_attempts', 0) + 1, 'explicit_reset': False,
                 'sessions': [sid for _, sid, _, _ in failures],
                 'markers': [m for _, _, m, _ in failures],
@@ -357,14 +361,29 @@ def quota_check(ctx, state):
         target = credentials.choose(state, listed, now)
         if target and not target['active']:
             credentials.activate(oc, target['id'])
-        for sid in hold['sessions']:
-            info = oc('get', f'/api/session/{sid}')['data']
-            if not info.get('time', {}).get('idle'):
-                continue  # A provider/internal retry already resumed this run.
-            oc('post', f'/api/session/{sid}/prompt', {'text':
-                'Provider quota cooldown has elapsed. Resume your existing assigned run from durable '
-                'state. Preserve its claim, worktree, branch and completed steps; inspect current '
-                'state before retrying writes. Do not start a duplicate task or repeat a completed merge/deployment.'})
+            hold['credential_changed'] = True
+        if hold.get('credential_changed'):
+            # A session opened under one account is rejected when resumed under
+            # another (401 rejected_by_access_enforcement). Close it out and let
+            # the next pass start fresh from the board and continuation file.
+            state['active'] = None
+            state['resume_after_switch'] = True
+            worker_path = ctx.state / 'workers.json'
+            if worker_path.exists():
+                ledger = json.loads(worker_path.read_text())
+                for worker in ledger.values():
+                    if worker['session'] in hold['sessions']:
+                        worker['terminal'], worker['outcome'] = True, 'interrupted'
+                save(worker_path, ledger)
+        else:
+            for sid in hold['sessions']:
+                info = oc('get', f'/api/session/{sid}')['data']
+                if not info.get('time', {}).get('idle'):
+                    continue  # A provider/internal retry already resumed this run.
+                oc('post', f'/api/session/{sid}/prompt', {'text':
+                    'Provider quota cooldown has elapsed. Resume your existing assigned run from durable '
+                    'state. Preserve its claim, worktree, branch and completed steps; inspect current '
+                    'state before retrying writes. Do not start a duplicate task or repeat a completed merge/deployment.'})
         if state.get('active') and state['active']['id'] in hold['sessions']:
             state['active']['started'] = now
         state.setdefault('quota_seen', []).extend(hold['markers'])
@@ -465,7 +484,10 @@ def step(ctx, state):
                 f'Configuration: {ROOT}/projects/{ctx.cfg["name"]}.json. '
                 f'Event snapshot: {ctx.state}/snapshot.json. '
                 'Process existing PRs/deployments/test replies first, then ready work. '
-                'One bounded pass; leave durable continuation and notification events.'})
+                + ('The previous session was closed by an OpenAI account switch; its branch and claim '
+                   'state is authoritative, so inspect before re-dispatching anything. '
+                   if state.pop('resume_after_switch', False) else '')
+                + 'One bounded pass; leave durable continuation and notification events.'})
     state['active']['admitted'] = True
     return state
 
