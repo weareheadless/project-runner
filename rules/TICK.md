@@ -19,7 +19,7 @@ First recover the last continuation, review existing project PRs and deployment
 receipts, and process owner replies in the notification inbox. Then dispatch new
 Ready work into free slots, maximum project max_dispatch active workers.
 
-**Finish before you start.** Run `python3 runner/queue.py --project <project>`
+**Finish before you start.** Run `python3 runner/workqueue.py --project <project>`
 and work it top down. It is the authoritative order: merge, repair, closed-PR
 inspection, adopt, dispatch. Never dispatch while section 1 or 2 is non-empty. A
 pass that starts a new run while a mergeable PR is open is a wasted pass.

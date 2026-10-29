@@ -1,5 +1,5 @@
 import unittest
-import queue as q
+import workqueue as q
 
 
 def pr(title='', body=''):
