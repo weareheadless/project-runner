@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from tick import ROOT, Ctx, board, fields
+import credentials
 from quota import quota_error, suspension
 
 
@@ -223,11 +224,45 @@ def quota_failures(ctx, state, exclude=()):
     return failures
 
 
+def prefer_credential(ctx, state, hold, now):
+    """Use a spare OpenAI account instead of waiting; wait only when all are dry."""
+    if not ctx.cfg.get('credential_failover', True):
+        return
+    if hold.get('switched') or hold.get('resuming'):
+        return
+    listed = credentials.accounts(oc)
+    if len(listed) < 2:
+        return
+    target = credentials.choose(state, listed, now)
+    if not target:
+        # Every account is exhausted: wait for whichever window resets first.
+        earliest = credentials.earliest_reset(state, listed, now)
+        if earliest:
+            hold['until'] = min(hold['until'], earliest)
+        return
+    # A usable credential exists: use it now. When it is already active (manual
+    # switch or a legacy hold), only shorten the wait; do not re-activate.
+    if not target['active']:
+        credentials.activate(oc, target['id'])
+        event = {'id': f'quota-switch-{hold["markers"][0]}-{target["id"]}',
+                 'kind': 'quota-switched',
+                 'message': f'OpenAI quota exhausted on one account; switched to credential '
+                            f'{target["label"]} (account {target["account"]}). Resuming preserved work.'}
+        outbox = ctx.state / 'outbox'
+        outbox.mkdir(exist_ok=True)
+        save(outbox / (event['id'] + '.json'), event)
+        ui_notify(event)
+    hold['switched'] = target['id']
+    hold['until'] = min(hold['until'], now + ctx.cfg.get('credential_switch_settle', 15))
+    save(ctx.state / 'supervisor.json', state)
+
+
 def quota_check(ctx, state):
     """Return True while suspended/recovering. No model calls before reset."""
     now = time.time()
     hold = state.get('quota')
     if hold:
+        prefer_credential(ctx, state, hold, now)
         if now < hold['until']:
             # Catch workers that hit the same exhausted account a few seconds
             # later; don't leave their internal provider retries running.
@@ -246,6 +281,10 @@ def quota_check(ctx, state):
             return True
         hold['resuming'] = True
         save(ctx.state / 'supervisor.json', state)
+        listed = credentials.accounts(oc)
+        target = credentials.choose(state, listed, now)
+        if target and not target['active']:
+            credentials.activate(oc, target['id'])
         for sid in hold['sessions']:
             info = oc('get', f'/api/session/{sid}')['data']
             if not info.get('time', {}).get('idle'):
@@ -279,6 +318,11 @@ def quota_check(ctx, state):
     timers = [suspension(error, now, attempt) for _, _, error in failures]
     hold = max(timers, key=lambda x: x['until'])
     hold.update(sessions=[sid for sid, _, _ in failures], markers=[m for _, m, _ in failures])
+    listed = credentials.accounts(oc) if ctx.cfg.get('credential_failover', True) else []
+    current = next((c for c in listed if c['active']), None)
+    if current:
+        credentials.mark_exhausted(state, current['id'], hold['until'], hold['markers'][0])
+        hold['exhausted_credential'] = current['id']
     # Stop an internal provider retry loop before parking it; only affected
     # sessions are interrupted, never unrelated workers that are making progress.
     for sid in hold['sessions']:
@@ -287,6 +331,7 @@ def quota_check(ctx, state):
             oc('post', f'/api/session/{sid}/interrupt', {})
     state['quota'] = hold
     state['quota_attempts'] = attempt
+    prefer_credential(ctx, state, hold, now)
     save(ctx.state / 'supervisor.json', state)
     # One durable event per exhaustion episode, not one alert per poll/retry.
     if state.get('quota_notified') not in hold['markers']:

@@ -42,6 +42,14 @@ def main(project='site-agent'):
     active = state.get('active')
     if active:
         print(f'active       {active["id"]} (started {age(active["started"])})')
+    table = state.get('credentials') or {}
+    if table:
+        print('accounts     (OpenAI credentials used by failover)')
+        for cred_id, entry in sorted(table.items()):
+            until = entry.get('exhausted_until', 0)
+            when = ('exhausted until ' + time.strftime('%H:%M:%S', time.localtime(until))
+                    + f' ({age(until)})') if until > time.time() else 'available'
+            print(f'  {cred_id}  {when}')
     if state.get('quota_recovering'):
         print(f'recovering   {", ".join(state["quota_recovering"])}')
     if workers:
