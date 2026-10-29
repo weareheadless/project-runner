@@ -134,19 +134,23 @@ def step(ctx, state, now):
     if not gap.get('main_sha') or not gap.get('running_sha') or gap['main_sha'] == gap['running_sha']:
         return
     key = f"{gap['main_sha']}:{gap['running_sha']}"
-    if key in state.setdefault('release_gap_events', {}):
-        return
-    queued = False
-    try:
-        queued = queue_release(ctx, state, gap)
-    except Exception as exc:
-        gap['blocked_reason'] = f'release queue failed: {exc}'
+    # The event is deduplicated, the queue attempt is not: a gap that was
+    # reported while blocked must still be released once the block clears.
+    already_reported = key in state.setdefault('release_gap_events', {})
+    queued = gap['main_sha'] in state.get('auto_release_queued', {})
+    if not queued:
+        try:
+            queued = queue_release(ctx, state, gap)
+        except Exception as exc:
+            gap['blocked_reason'] = f'release queue failed: {exc}'
     event = {'id': 'delivery-gap-' + key, 'kind': 'delivery-gap',
              'message': f"API release gap: main {gap['main_sha']}, running {gap['running_sha']}; "
                         f"release {'queued' if queued else 'not queued'}. "
                         f"{gap.get('blocked_reason') or ''}"}
+    state['release_gap_events'][key] = {'queued': queued, 'at': now}
+    if already_reported:
+        return
     outbox = ctx.state / 'outbox'
     outbox.mkdir(exist_ok=True)
     from supervisor import save
     save(outbox / (event['id'] + '.json'), event)
-    state['release_gap_events'][key] = {'queued': queued, 'at': now}

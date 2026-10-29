@@ -36,9 +36,14 @@ class ReleaseGapTests(unittest.TestCase):
         return {'releaseId': 'r1', 'sourceSha': 'b' * 40, 'status': 'success'}
 
     def test_success_queues_once_and_dedupes_event(self):
+        state = {'release_gap_events': {}, 'auto_release_queued': {}}
+
+        def record(ctx, st, gap):
+            st['auto_release_queued'][gap['main_sha']] = {'releaseId': 'r1', 'queued_at': 0}
+            return True
+
         with patch.object(release_gap, 'running_api', return_value=self.running()), \
-             patch.object(release_gap, 'queue_release', return_value=True) as queue:
-            state = {'release_gap_events': {}, 'auto_release_queued': {}}
+             patch.object(release_gap, 'queue_release', side_effect=record) as queue:
             release_gap.step(self.ctx, state, 10)
             release_gap.step(self.ctx, state, 11)
             queue.assert_called_once()
@@ -120,6 +125,13 @@ class ReleaseGapTests(unittest.TestCase):
             gap = release_gap.inspect(ctx, {}, 0)
         self.assertIsNone(gap['blocked_reason'])
         self.assertEqual(len(gap['commits']), 1)
+
+    def test_blocked_gap_still_queues_after_block_clears(self):
+        state = {'release_gap_events': {'a' * 40 + ':' + 'b' * 40: {'queued': False, 'at': 0}}}
+        with patch.object(release_gap, 'running_api', return_value=self.running()), \
+             patch.object(release_gap, 'queue_release', return_value=True) as queue:
+            release_gap.step(self.ctx, state, 1)
+        queue.assert_called_once()
     def test_duplicate_main_sha_and_auto_disabled(self):
         gap = {'main_sha': 'a'*40, 'running_sha': 'b'*40}
         state = {'auto_release_queued': {'a'*40: {} }}
