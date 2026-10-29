@@ -152,8 +152,8 @@ class SupervisorTests(unittest.TestCase):
     @patch.object(s, 'oc')
     def test_success_changed_state_reconciles_again(self, oc, snapshot, outbox):
         snapshot.return_value = self.snap
-        oc.side_effect = [{'data': {'time': {'idle': 1}, 'outcome': 'succeeded'}}, {},
-                          {'data': {'id': 'ses_followup'}}, {}]
+        oc.side_effect = [{'data': {'time': {'idle': 1}, 'outcome': 'succeeded'}},
+                          {'data': []}, {}, {'data': {'id': 'ses_followup'}}, {}]
         state = s.step(self.ctx, {'active': {'id': 'ses_done', 'started': 1, 'admitted': True},
                                   'fingerprint': 'old-state'})
         self.assertEqual(state['active']['id'], 'ses_followup')

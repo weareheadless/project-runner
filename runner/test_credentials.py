@@ -153,3 +153,49 @@ class FailoverTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AuthFailoverTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ctx = Mock()
+        self.ctx.state = Path(self.tmp.name)
+        self.ctx.cfg = {'credential_failover': True, 'credential_switch_settle': 15,
+                        'credential_broken_seconds': 3600}
+
+    def test_auth_error_is_not_quota(self):
+        error = {'type': 'provider.auth', 'status': 401,
+                 'response': {'body': '{"error":{"code":"no_matching_rule"}}'}}
+        self.assertTrue(credentials.auth_failure(error))
+        self.assertFalse(credentials.auth_failure(QUOTA_ERROR))
+        self.assertFalse(credentials.auth_failure({'type': 'provider.error', 'message': 'socket closed'}))
+
+    @patch.object(s, 'ui_notify')
+    def test_refused_account_rotates_instead_of_pausing(self, ui):
+        creds = [credential('cred_a', False), credential('cred_b', True, TOKEN_B)]
+        messages = {'ses_work': [{'id': 'm401', 'type': 'idle',
+                                  'error': {'type': 'provider.auth', 'status': 401,
+                                            'response': {'body': '{"error":{"code":"no_matching_rule"}}'}}}]}
+        oc = Mock(side_effect=make_oc(creds, {}, messages))
+        state = {'active': {'id': 'ses_work', 'started': 900}}
+        with patch.object(s, 'oc', oc), patch.object(s.time, 'time', return_value=1000):
+            self.assertTrue(s.quota_check(self.ctx, state))
+        self.assertFalse(state.get('paused', False))
+        self.assertEqual(state['credentials']['cred_b']['broken_until'], 4600)
+        self.assertEqual(state['quota']['switched'], 'cred_a')
+        self.assertEqual(state['quota']['until'], 1015)
+        self.assertIn('/api/credential/cred_a/activate', [c.args[1] for c in oc.call_args_list])
+
+    @patch.object(s, 'ui_notify')
+    def test_all_accounts_refused_pauses_for_human(self, ui):
+        creds = [credential('cred_b', True, TOKEN_B)]
+        messages = {'ses_work': [{'id': 'm401', 'type': 'idle',
+                                  'error': {'type': 'provider.auth', 'status': 401}}]}
+        oc = Mock(side_effect=make_oc(creds, {}, messages))
+        state = {'active': {'id': 'ses_work', 'started': 900}}
+        with patch.object(s, 'oc', oc), patch.object(s.time, 'time', return_value=1000):
+            self.assertTrue(s.quota_check(self.ctx, state))
+        self.assertTrue(state['paused'])
+        self.assertEqual(len(list((self.ctx.state / 'outbox').glob('auth-blocked-*.json'))), 1)
+        self.assertFalse(any('/activate' in c.args[1] for c in oc.call_args_list))

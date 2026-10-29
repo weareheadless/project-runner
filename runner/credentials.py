@@ -58,15 +58,45 @@ def mark_exhausted(state, credential_id, until, marker=None):
 
 
 def usable(state, listed, now):
-    """Credentials whose own window has reset, in stable order."""
+    """Credentials that are neither out of quota nor rejected by access policy."""
     table = state.get('credentials', {})
     return [c for c in listed
-            if table.get(c['id'], {}).get('exhausted_until', 0) <= now]
+            if table.get(c['id'], {}).get('exhausted_until', 0) <= now
+            and table.get(c['id'], {}).get('broken_until', 0) <= now]
+
+
+def mark_broken(state, credential_id, until, marker=None):
+    """A credential that authenticated but was refused (e.g. no model access).
+
+    Waiting for a quota reset will not fix this; it needs a re-login or access
+    change. It is retried after a bounded delay rather than discarded.
+    """
+    if not credential_id:
+        return
+    table = state.setdefault('credentials', {})
+    entry = table.setdefault(credential_id, {})
+    entry['broken_until'] = max(entry.get('broken_until', 0), until)
+    if marker:
+        entry['last_broken_marker'] = marker
+
+
+def auth_failure(error):
+    """Access refusal, distinct from quota and from a transient network error."""
+    if not isinstance(error, dict):
+        return False
+    kind = str(error.get('type', '')).lower()
+    status = error.get('status')
+    body = str(error.get('response', {}).get('body', '')).lower()
+    if kind.startswith('provider.quota'):
+        return False
+    return (status in (401, 403) or 'provider.auth' in kind or 'unauthorized' in kind
+            or 'rejected_by_access_enforcement' in body or 'no_matching_rule' in body)
 
 
 def earliest_reset(state, listed, now):
     table = state.get('credentials', {})
-    future = [table.get(c['id'], {}).get('exhausted_until', 0) for c in listed]
+    future = [max(table.get(c['id'], {}).get('exhausted_until', 0),
+                  table.get(c['id'], {}).get('broken_until', 0)) for c in listed]
     future = [t for t in future if t > now]
     return min(future) if future else None
 

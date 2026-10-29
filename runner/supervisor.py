@@ -187,7 +187,36 @@ def process_outbox(ctx):
         path.rename(path.with_suffix('.sent'))
 
 
+def terminal_error(session_id):
+    """Last provider error for a stopped session, if it is the newest event."""
+    try:
+        payload = oc('get', f'/api/session/{session_id}/message?limit=4&order=desc')
+    except Exception:
+        return None
+    messages = payload.get('data') if isinstance(payload, dict) else None
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if not isinstance(message, dict) or message.get('type') == 'user':
+            return None
+        error = message.get('error') or (message.get('retry') or {}).get('error')
+        if error:
+            return error
+    return None
+
+
+def provider_failures(ctx, state, exclude=()):
+    """Return (kind, sid, marker, error) for quota or access-refusal failures."""
+    return [(kind, sid, marker, error)
+            for kind, sid, marker, error in _scan_failures(ctx, state, exclude)]
+
+
 def quota_failures(ctx, state, exclude=()):
+    return [(sid, marker, error) for kind, sid, marker, error in
+            _scan_failures(ctx, state, exclude) if kind == 'quota']
+
+
+def _scan_failures(ctx, state, exclude=()):
     sessions = [state['active']['id']] if state.get('active') else []
     path = ctx.state / 'workers.json'
     if path.exists():
@@ -207,8 +236,13 @@ def quota_failures(ctx, state, exclude=()):
                 break
             error = m.get('error') or (m.get('retry') or {}).get('error')
             marker = sid + ':' + m['id']
-            if error and marker not in state.get('quota_seen', []) and quota_error(error):
-                hit = (sid, marker, error)
+            if not error or marker in state.get('quota_seen', []):
+                continue
+            if quota_error(error):
+                hit = ('quota', sid, marker, error)
+                break
+            if credentials.auth_failure(error):
+                hit = ('auth', sid, marker, error)
                 break
         if hit:
             failures.append(hit)
@@ -257,9 +291,47 @@ def prefer_credential(ctx, state, hold, now):
     save(ctx.state / 'supervisor.json', state)
 
 
+def handle_auth(ctx, state, failures, now):
+    """Rotate away from a refused credential; pause only if none can work."""
+    state.setdefault('quota_seen', []).extend(marker for _, _, marker, _ in failures)
+    listed = credentials.accounts(oc) if ctx.cfg.get('credential_failover', True) else []
+    current = next((c for c in listed if c['active']), None)
+    until = now + ctx.cfg.get('credential_broken_seconds', 3600)
+    if current:
+        credentials.mark_broken(state, current['id'], until, failures[0][2])
+    target = credentials.choose(state, listed, now) if len(listed) > 1 else None
+    if target:
+        if not target['active']:
+            credentials.activate(oc, target['id'])
+        hold = {'until': now + ctx.cfg.get('credential_switch_settle', 15),
+                'attempt': state.get('quota_attempts', 0) + 1, 'explicit_reset': False,
+                'sessions': [sid for _, sid, _, _ in failures],
+                'markers': [m for _, _, m, _ in failures],
+                'switched': target['id'], 'reason': 'auth'}
+        state['quota'] = hold
+        save(ctx.state / 'supervisor.json', state)
+        return True
+    # Nothing usable: a 401 does not heal by waiting, so stop and ask for a human.
+    state['paused'] = True
+    state['paused_reason'] = 'credential refused by provider access policy'
+    event = {'id': 'auth-blocked-' + failures[0][2], 'kind': 'blocked',
+             'message': 'OpenAI refused the active credential (401 access enforcement) and no other '
+                        'configured account can be used. Re-login or grant model access, then clear the pause.'}
+    outbox = ctx.state / 'outbox'
+    outbox.mkdir(exist_ok=True)
+    save(outbox / (event['id'] + '.json'), event)
+    ui_notify(event)
+    save(ctx.state / 'supervisor.json', state)
+    return True
+
+
 def quota_check(ctx, state):
     """Return True while suspended/recovering. No model calls before reset."""
     now = time.time()
+    if not state.get('paused'):
+        auth = [f for f in _scan_failures(ctx, state) if f[0] == 'auth']
+        if auth:
+            return handle_auth(ctx, state, auth, now)
     hold = state.get('quota')
     if hold:
         prefer_credential(ctx, state, hold, now)
@@ -367,6 +439,10 @@ def step(ctx, state):
             return state
         state['active'] = None
         state['last_outcome'] = info.get('outcome')
+        error = terminal_error(active['id'])
+        recoverable = bool(error) and (quota_error(error) or credentials.auth_failure(error))
+        if info.get('outcome') != 'succeeded' and recoverable:
+            return state  # provider failure: rotation or cooldown owns it
         if info.get('outcome') != 'succeeded':
             notify(ctx, {'id': f'failed-{active["id"]}', 'kind': 'blocked',
                          'message': f'Coordinator failed: {active["id"]}. Automation paused; no automatic retry storm.'})
