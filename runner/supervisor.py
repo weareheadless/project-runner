@@ -469,7 +469,15 @@ def step(ctx, state):
         outbox.mkdir(exist_ok=True)
         save(outbox / (event['id'] + '.json'), event)
         ui_notify(event)
-    fingerprint = digest(current)
+    # Management policy changes are actionable events too. Without this, a
+    # completed pass can remain asleep on its old policy until GitHub changes.
+    policy_paths = [ROOT / 'rules' / 'TICK.md',
+                    ROOT / 'projects' / f'{ctx.cfg["name"]}.json']
+    if ctx.cfg.get('goal_file'):
+        policy_paths.append(ROOT / ctx.cfg['goal_file'])
+    policy = {str(p.relative_to(ROOT)): digest(p.read_text())
+              for p in policy_paths if p.exists()}
+    fingerprint = digest({'project': current, 'policy': policy})
     save(ctx.state / 'snapshot.json', current)
     active = state.get('active')
     if active:

@@ -66,7 +66,13 @@ class SupervisorTests(unittest.TestCase):
     @patch.object(s, 'oc')
     def test_unchanged_does_not_wake(self, oc, snapshot, outbox):
         snapshot.return_value = self.snap
-        s.step(self.ctx, {'fingerprint': s.digest(self.snap)})
+        s.step(self.ctx, {'paused': True})
+        # A matching fingerprint includes management-policy identity.
+        import json as json_module
+        written = json_module.loads((self.ctx.state / 'snapshot.json').read_text())
+        paths = [s.ROOT / 'rules' / 'TICK.md', s.ROOT / 'projects' / 'test.json']
+        policy = {str(p.relative_to(s.ROOT)): s.digest(p.read_text()) for p in paths if p.exists()}
+        s.step(self.ctx, {'fingerprint': s.digest({'project': written, 'policy': policy})})
         oc.assert_not_called()
 
     @patch.object(s, 'process_outbox')
