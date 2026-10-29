@@ -1,0 +1,17 @@
+[Unit]
+Description=Project runner event supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/tools/project-runner
+Environment=PATH=/home/admin/.opencode/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/home/admin/.config/project-runner/notifications.env
+ExecStart=/usr/bin/python3 -u runner/supervisor.py --project site-agent
+Restart=on-failure
+RestartSec=15
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -31,6 +31,7 @@ class Ctx:
         self.state = ROOT / ".tick" / cfg["name"]
         self.state.mkdir(parents=True, exist_ok=True)
         self.tok = self._token()
+        self.cache = {}
 
     def _token(self):
         t = self.cfg["token"]
@@ -53,17 +54,25 @@ class Ctx:
                      "Accept": "application/vnd.github+json",
                      "Content-Type": "application/json",
                      "User-Agent": "project-runner"})
-        for attempt in range(4):
+        if method == 'GET' and url in self.cache:
+            req.add_header('If-None-Match', self.cache[url][0])
+        attempts = self.cfg.get('github_attempts', 4)
+        for attempt in range(attempts):
             try:
-                with urllib.request.urlopen(req, timeout=45) as r:
-                    return json.load(r)
+                with urllib.request.urlopen(req, timeout=self.cfg.get('github_timeout', 45)) as r:
+                    value = json.load(r)
+                    if method == 'GET' and r.headers.get('ETag'):
+                        self.cache[url] = (r.headers['ETag'], value)
+                    return value
             except urllib.error.HTTPError as e:
-                if e.code in (403, 429, 502, 503) and attempt < 3:
+                if e.code == 304 and url in self.cache:
+                    return self.cache[url][1]
+                if e.code in (403, 429, 502, 503) and attempt < attempts - 1:
                     time.sleep(5 * (attempt + 1))
                     continue
                 raise
             except (TimeoutError, urllib.error.URLError, OSError):
-                if attempt < 3:
+                if attempt < attempts - 1:
                     time.sleep(3 * (attempt + 1))
                     continue
                 raise
@@ -86,6 +95,7 @@ query($owner:String!,$num:Int!,$cursor:String){
         id
         content{ __typename
           ... on Issue{ number title state updatedAt url
+            body repository{nameWithOwner}
             labels(first:10){nodes{name}} } }
         fieldValues(first:40){nodes{
           ... on ProjectV2ItemFieldSingleSelectValue{ name
@@ -111,8 +121,15 @@ def fields(node):
 
 
 def claim_state(ctx, issue):
-    comments = ctx.api(f"https://api.github.com/repos/{ctx.repo}/issues/{issue}"
-                       f"/comments?per_page=50&sort=created&direction=desc")
+    comments = []
+    page = 1
+    while True:
+        batch = ctx.api(f"https://api.github.com/repos/{ctx.repo}/issues/{issue}"
+                        f"/comments?per_page=100&page={page}")
+        comments.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
     active = None
     for c in sorted(comments, key=lambda c: c["id"]):
         for m in CLAIM_RE.finditer(c.get("body") or ""):
@@ -144,13 +161,8 @@ def branches(ctx):
 
 
 def head_sha(ctx, repo, branch="main"):
-    o, n = repo.split("/")
-    try:
-        d = ctx.gql('query{repository(owner:"%s",name:"%s"){'
-                    'defaultBranchRef{target{... on Commit{oid}}}}}' % (o, n))
-        return d["repository"]["defaultBranchRef"]["target"]["oid"]
-    except Exception:
-        return None
+    from urllib.parse import quote
+    return ctx.api(f'https://api.github.com/repos/{repo}/commits/{quote(branch, safe="")}')['sha']
 
 
 def slug(title, work_id, prefix):
@@ -165,6 +177,8 @@ def collect(ctx):
     for n in items:
         c = n.get("content") or {}
         if c.get("__typename") != "Issue" or c.get("state") != "OPEN":
+            continue
+        if c.get("repository", {}).get("nameWithOwner") != ctx.repo:
             continue
         f = fields(n)
         m = WORK_ID_RE.search(c["title"])
@@ -225,6 +239,8 @@ def dispatch(ctx, as_json):
         "baseline": base,
         "contract": {"repository": ctx.cfg["contract"]["repository"], "sha": contract},
         "scope": ctx.cfg["scope"],
+        "effort": ctx.cfg.get("default_effort", "low"),
+        "auto_merge": ctx.cfg.get("auto_merge", False),
         "worktree": f"{ctx.cfg['worktree_root']}/{ctx.cfg['name']}-"
                     f"{(r['work_id'] or r['issue']).__str__().lower()}",
     } for r in picks]

@@ -1,16 +1,38 @@
 {
   "name": "site-agent",
-  "project": { "owner": "weareheadless", "number": 3 },
+  "project": {
+    "owner": "weareheadless",
+    "number": 3
+  },
   "repo": "weareheadless/site-agent",
-  "contract": { "repository": "weareheadless/crawlseo" },
+  "contract": {
+    "repository": "weareheadless/crawlseo"
+  },
   "baseline_branch": "main",
   "branch_prefix": "codex/",
   "worktree_root": "/home/admin/releases",
-  "scope": ["src/**", "tests/**", "docs/**"],
+  "scope": [
+    "src/**",
+    "tests/**",
+    "docs/**"
+  ],
   "max_dispatch": 3,
   "max_tick_seconds": 5400,
   "token": {
     "file": "/SOCIAL/configs/github.env",
     "key": "GITHUB_PROJECTS_TOKEN"
-  }
+  },
+  "default_effort": "low",
+  "auto_merge": true,
+  "poll_seconds": 20,
+  "github_timeout": 12,
+  "github_attempts": 2,
+  "orchestrator_model": {
+    "providerID": "openai",
+    "id": "gpt-6.1-sol",
+    "variant": "medium"
+  },
+  "repositories": ["weareheadless/site-agent", "weareheadless/crawlseo", "weareheadless/helloada", "weareheadless/wix-site-bridge"],
+  "receipt_roots": ["/SOCIAL/payload-releases/runs/api", "/SOCIAL/payload-releases/runs/helloada-app"],
+  "notification_repo": "weareheadless/project-runner"
 }

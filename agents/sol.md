@@ -1,8 +1,7 @@
 ---
 description: SOL, the architect and reviewer. Human-facing: decides scope, reviews PRs, answers escalations from workers. Does not implement.
 mode: primary
-model: openrouter/deepseek/deepseek-v4.1-flash-1017
-variant: high
+model: openai/gpt-6.1-sol#high
 permission:
   task: allow
   question: allow

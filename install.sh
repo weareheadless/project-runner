@@ -32,6 +32,7 @@ done
 if [ "$check" = 1 ]; then
   [ "$drift" = 0 ] && echo "in sync" || echo "run ./install.sh to apply"
 else
+  python3 "$R/runner/install_agents.py"
   echo "installed agents -> $AGENTS"
   echo "installed rules  -> $RULES/LUNA-RULES.md"
 fi
