@@ -17,7 +17,27 @@ Ready is necessary but not proof its prerequisites are satisfied.
 
 First recover the last continuation, review existing project PRs and deployment
 receipts, and process owner replies in the notification inbox. Then dispatch new
-Ready work into free slots, maximum project max_dispatch active workers. Never
+Ready work into free slots, maximum project max_dispatch active workers.
+
+**Finish before you start.** Run `python3 runner/queue.py --project <project>`
+and work it top down. It is the authoritative order: merge, repair, closed-PR
+inspection, adopt, dispatch. Never dispatch while section 1 or 2 is non-empty. A
+pass that starts a new run while a mergeable PR is open is a wasted pass.
+
+For section 3, read the closing comment first: a PR closed by the manager or the
+board audit is a decision, not a defect — do not reopen it. Reopen only when the
+close was incidental (branch cleanup, a failed check nobody fixed) and the issue
+is still open.
+
+**Repair, do not restart.** Before any dispatch, look for the branch and PR that
+already exist for the issue. A red `task-format / Agent task format` check means
+the PR body lacks a valid `agent-task` block — edit the PR body, never the code,
+and re-run the check. A closed-unmerged PR for an owned issue is repairable
+state: reopen it (or open a new PR from the same branch) after fixing the body.
+A new branch and a new run ID for an issue that already has a branch is the
+defect this rule exists to prevent. Only dispatch when no branch, PR or claim
+exists, or when the previous attempt is proven empty (branch equals baseline).
+ Never
 exceed the cap by starting a new batch while prior workers still run. Unrelated
 legacy PRs are not yours to merge. Select the repository from the card, not the
 issue number; numbers collide across repositories.
@@ -63,6 +83,11 @@ repositories; production currently serves as the development/test environment.
 This is not authorization to publish arbitrary customer changes, migrate data,
 change host policy or deploy unrelated repositories.
 
+A PR is mergeable when it is not a draft, every required check on the current
+head is `success`, and the diff matches the brief. Mark a green draft ready
+rather than leaving it as a draft; a green draft nobody merges is the most
+common way this loop stalls.
+
 For an owned PR, verify acceptance, dependency state, coordination checker and
 all required CI on the current head. Record a review JSON with repository,
 pr, head_sha, accepted=true, acceptance_evidence, tests, and reviewer_session.
@@ -104,6 +129,11 @@ and tested SHA; never infer approval from silence.
 
 If you cannot decide a real product ambiguity or find the right release path,
 notify a blocker; do not quietly park it in a local file.
+
+**Retry budget.** At most two worker runs per issue in a rolling 24 hours. A
+third attempt requires a blocker notification naming what the first two proved
+and what changed. Repeated runs with fresh run IDs are not progress; they are
+the symptom of an unrepaired PR or an unstated blocker.
 
 ## Exit
 
