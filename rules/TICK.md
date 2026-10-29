@@ -22,6 +22,13 @@ exceed the cap by starting a new batch while prior workers still run. Unrelated
 legacy PRs are not yours to merge. Select the repository from the card, not the
 issue number; numbers collide across repositories.
 
+Run the pinned coordination policy through `node runner/coordination.mjs claim
+--plan <coordination-plan.json>` (or `check --repository owner/repo --pr N`).
+This versioned adapter changes only transport to IPv4 curl; the original checker
+still enforces claims, dependencies, pins and board writes. Do not invent further
+transport wrappers or retry the broken Node fetch path. Coordination plans must
+contain only the checker's fields; retain worktree in the separate worker plan.
+
 ## Workers
 
 Use luna-worker by default; luna-worker-med for clear multi-file changes or one

@@ -138,7 +138,7 @@ def claim_state(ctx, issue):
             except json.JSONDecodeError:
                 continue
             if ev.get("event") == "claim":
-                active = ev.get("agentRun")
+                active = ev.get("plan", {}).get("agentRun") or ev.get("agentRun")
             elif ev.get("event") == "release" and ev.get("agentRun") == active:
                 active = None
     return ("claim", active) if active else ("none", None)

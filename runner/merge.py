@@ -62,7 +62,7 @@ def main():
                          capture_output=True, text=True, check=True).stdout.strip()
     if pin != cfg.get('coordination_checker_sha'):
         raise ValueError('coordination checker pin changed')
-    result = subprocess.run(['node', checker, 'check', '--repository', ctx.repo,
+    result = subprocess.run(['node', str(ROOT / 'runner' / 'coordination.mjs'), 'check', '--repository', ctx.repo,
                              '--pr', str(pr['number'])],
                             cwd=checker_dir,
                             env={**os.environ, 'GH_TOKEN': ctx.tok},

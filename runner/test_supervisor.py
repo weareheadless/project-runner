@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import merge
 import supervisor as s
+from tick import claim_state
 
 
 class MergeTests(unittest.TestCase):
@@ -112,6 +113,16 @@ class SupervisorTests(unittest.TestCase):
 
     def test_fingerprint_stable_key_order(self):
         self.assertEqual(s.digest({'a': 1, 'b': 2}), s.digest({'b': 2, 'a': 1}))
+
+    def test_nested_claim_identity_and_release(self):
+        claim = {'id': 1, 'body': '<!-- agent-claim\n' + json.dumps(
+            {'event': 'claim', 'plan': {'agentRun': 'owned-run'}}) + '\n-->'}
+        self.ctx.api.return_value = [claim]
+        self.ctx.repo = 'o/r'
+        self.assertEqual(claim_state(self.ctx, 1), ('claim', 'owned-run'))
+        self.ctx.api.return_value = [claim, {'id': 2, 'body': '<!-- agent-claim\n' +
+            json.dumps({'event': 'release', 'agentRun': 'owned-run'}) + '\n-->'}]
+        self.assertEqual(claim_state(self.ctx, 1), ('none', None))
 
     @patch.object(s, 'notify')
     @patch.object(s, 'process_outbox')

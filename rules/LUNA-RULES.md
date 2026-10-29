@@ -1,5 +1,13 @@
 # Luna worker operational rules (read this before acting)
 
+Transport update: run coordination commands via
+`node /home/admin/tools/project-runner/runner/coordination.mjs ...`.
+It uses the pinned canonical checker with compressed IPv4 HTTPS transport.
+Do not invoke the checker's direct Node fetch entrypoint or create ad-hoc
+wrappers: direct fetch has timed out on this host. For other GitHub curl reads,
+use `curl -4 --compressed` with bounded connection/request timeouts. A failed
+write has ambiguous state: re-read the claim/PR before retrying it.
+
 These rules apply to every dispatch from SOL for Project #3 (Unified Business
 Intelligence) and take precedence over stale agent prompts and over generic
 repository credential guidance.
