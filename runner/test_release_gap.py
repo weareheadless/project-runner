@@ -105,6 +105,21 @@ class ReleaseGapTests(unittest.TestCase):
                  {'check_runs': [{'name': 'ci', 'status': 'completed', 'conclusion': 'success'}]}]):
             self.assertIn('migration', release_gap.inspect(self.ctx, {}, 0)['blocked_reason'])
 
+
+    def test_queue_file_commit_does_not_block(self):
+        ctx = Ctx(self.tmp.name)
+        original = ctx.api
+
+        def api(url, method='GET', body=None):
+            if '/compare/' in url:
+                return {'commits': [{'sha': 'c' * 40, 'files': [{'filename': 'deploy/desired-api-release.json'}]}]}
+            return original(url, method, body)
+
+        ctx.api = api
+        with patch.object(release_gap, 'running_api', return_value=self.running()):
+            gap = release_gap.inspect(ctx, {}, 0)
+        self.assertIsNone(gap['blocked_reason'])
+        self.assertEqual(len(gap['commits']), 1)
     def test_duplicate_main_sha_and_auto_disabled(self):
         gap = {'main_sha': 'a'*40, 'running_sha': 'b'*40}
         state = {'auto_release_queued': {'a'*40: {} }}

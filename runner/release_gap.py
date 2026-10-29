@@ -54,21 +54,18 @@ def inspect(ctx, state, now):
         elif not meaningful or any(c.get('status') != 'completed' or c.get('conclusion') != 'success'
                                    for c in meaningful):
             reason = 'main-head checks are not all completed successfully'
-        elif any(re.search(r'(^|/)migrations(/|$)', p if isinstance(p, str) else p.get('filename', '')) or
-                 ((p if isinstance(p, str) else p.get('filename', '')).startswith('deploy/desired-') and
-                  'release' in (p if isinstance(p, str) else p.get('filename', '')) and
-                  (p if isinstance(p, str) else p.get('filename', '')).endswith('.json'))
+        elif any(re.search(r'(^|/)migrations(/|$)', p if isinstance(p, str) else p.get('filename', ''))
                  for c in commits for p in c.get('files', [])):
-            reason = 'gap includes migration or schema-release paths'
+            # Queue files are ordinary metadata: blocking on them would stall
+            # forever, because every queued release is itself such a commit.
+            reason = 'gap includes a schema migration'
         # GitHub compare may elide files from commits; fetch each commit's paths.
         if not reason and not any(c.get('files') for c in commits):
             for c in commits:
                 files = _api(ctx, f'commits/{c["sha"]}').get('files', [])
                 c['files'] = files
-                if any(re.search(r'(^|/)migrations(/|$)', f['filename']) or
-                       (f['filename'].startswith('deploy/desired-') and 'release' in f['filename']
-                        and f['filename'].endswith('.json')) for f in files):
-                    reason = 'gap includes migration or schema-release paths'
+                if any(re.search(r'(^|/)migrations(/|$)', f['filename']) for f in files):
+                    reason = 'gap includes a schema migration'
                     break
         return {'main_sha': main_sha, 'running_sha': running_sha, 'status': running['status'],
                 'blocked_reason': reason, 'commits': commits}
