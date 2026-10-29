@@ -58,6 +58,46 @@ with a concrete recommendation. Resolve ordinary technical decisions yourself.
 
 ## Completion and evidence
 
+### Available browser investigations and regression tests
+
+Read `projects/site-agent-tests.json` when investigating an owner-visible defect
+or deciding verification for a relevant diff. Discover by issue or changed path:
+`python3 runner/test_catalog.py --project site-agent --issue 458` (or `--path
+src/site_agent/web/intake_lab.py`). The catalogue names commands, prerequisites,
+evidence and explicit coverage gaps; it is not an automatic paid-test scheduler.
+
+Run deterministic tests through `python3 runner/run_test.py --project site-agent
+--test intake-surface --checkout <reviewed-checkout>`. This pins the Python import,
+keeps private command output and queues a durable result. For an authorized live
+flow, pass the harness `--runner-results-dir .tick/site-agent/test-results` using
+an absolute path rooted at this runner checkout. The supervisor consumes that
+queue even during model quota cooldowns: failed tests, unavailable execution and
+malformed evidence open or reuse a fingerprinted GitHub issue on the Project.
+Repeated failures do not create another issue; a closed matching issue reopens.
+Publication outages retain receipts and back off instead of dropping evidence.
+Do not call bare pytest for a required validation and omit its result receipt.
+
+Use the cheap deterministic test first, then an authorized bounded live flow if
+it addresses the broken boundary. The test owner uses `openai/gpt-6-luna` through
+the existing OpenCode OpenAI authentication, not OpenRouter or a copied OAuth
+token. This does not silently change Ada's configured production model. Observe
+both models in evidence; do not rotate host-global accounts while owned work runs.
+
+The harness branch `codex/qa-flow-harness` is unmerged. Independently qualify its
+exact checkout before running it. Its current live flow is exploratory Intake Lab
+coverage, not proof of canonical authenticated Payload onboarding, safe website
+teardown or production provisioning. Never make it a required release gate until
+these gaps are resolved. Keep one owned test target, preserve per-run diagnostics,
+and never delete customer resources or infer deprovisioning from incubation DELETE.
+
+On a failure, retain the first broken boundary, transcript/screenshots, exact
+source/serving identities, timings and full build diagnostics. Deduplicate against
+existing issues and attach evidence there; create a narrowly scoped prerequisite
+only when the cause is supported. Rerun the same relevant test after a fix. An
+unavailable provider is unavailable, not a product regression or a passing run.
+UI-056 still requires its controlled invalid-plan recovery case as well as the
+owner journey; a successful normal build alone does not prove correction/resume.
+
 Keep implementation delivered, deployed, functionally verified and awaiting owner
 judgement distinct. Merged is not Verified. Track exact SHAs and release receipts;
 prove integrated behavior, not only unit fixtures or a public health response.

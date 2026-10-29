@@ -1,0 +1,44 @@
+{
+  "schema": "project-runner.test-catalog/1",
+  "repository": "weareheadless/site-agent",
+  "harness_branch": "codex/qa-flow-harness",
+  "adoption": "Unmerged harness: use only a reviewed explicit checkout; do not claim main or deployed coverage.",
+  "default_test_owner": {"backend": "opencode", "model": "openai/gpt-6-luna", "authentication": "existing OpenCode OpenAI provider; no copied keys or account rotation"},
+  "tests": [
+    {
+      "id": "qa-harness-regressions",
+      "purpose": "Check the browser test driver itself: owner conversation, errors, evidence, timing and cleanup fixtures.",
+      "tier": "deterministic",
+      "issues": [428, 458, 481],
+      "paths": ["src/site_agent/qa/", "flows/", "tests/test_qa_"],
+      "argv": ["python3", "-m", "pytest", "tests/test_qa_flow.py", "tests/test_qa_driver.py", "tests/test_qa_conversation.py", "tests/test_qa_evidence.py", "tests/test_qa_rubric.py", "tests/test_qa_ledger.py", "tests/test_qa_intake_surface.py", "-q"],
+      "requires": ["reviewed harness checkout", "Playwright and installed Chromium"],
+      "evidence": "exact checkout SHA, pinned import assertion, pytest output",
+      "proves": "harness mechanics, not a live site build"
+    },
+    {
+      "id": "intake-surface",
+      "purpose": "Reproduce owner-shell boot, controls or browser-console regressions without model calls.",
+      "tier": "deterministic",
+      "issues": [458, 481],
+      "paths": ["src/site_agent/web/", "src/site_agent/application/intake", "src/site_agent/application/incubation", "flows/"],
+      "argv": ["python3", "-m", "pytest", "tests/test_qa_intake_surface.py", "-q"],
+      "requires": ["reviewed harness checkout", "Playwright and installed Chromium"],
+      "evidence": "pytest output; CLI variant records screenshots and site-agent.qa.evidence/1",
+      "proves": "legacy Intake Lab shell only, not canonical Payload onboarding or a build"
+    },
+    {
+      "id": "intake-to-preview",
+      "purpose": "Investigate conversational intake through planning, generation, candidate review and provisioning.",
+      "tier": "live",
+      "issues": [352, 353, 428, 458, 481],
+      "paths": ["src/site_agent/application/design", "src/site_agent/hands/opencode", "src/site_agent/hands/site_build", "src/site_agent/hands/design_experiment", "src/site_agent/templates/", "src/site_agent/web/", "deploy/"],
+      "argv": ["python3", "-m", "site_agent.qa", "run", "flows/intake-to-preview.flow.yaml", "--base-url", "<registered-test-origin>", "--environment", "test", "--sha", "<source-sha>", "--deployed-sha", "<observed-serving-sha>", "--owner-backend", "opencode", "--owner-model", "openai/gpt-6-luna", "--evidence-dir", "<unique-run-evidence-dir>", "--artifacts-dir", "<unique-run-artifacts-dir>"],
+      "requires": ["reviewed harness checkout", "authorized disposable test target", "single-flight test ownership", "existing paid-work authorization and finite limits", "OpenAI provider availability", "verified canonical teardown; do not treat incubation DELETE as website deprovisioning"],
+      "evidence": "source and observed serving SHA, actual owner and target models, transcript, screenshots, timings, failed boundary, retained full build diagnostics, release/provision receipts where reached",
+      "proves": "exploratory local Intake Lab flow until canonical Payload entry, cleanup and release-path parity are proven",
+      "gate_ready": false,
+      "limitations": ["UI-056's exact missing-meaning recovery needs a separate controlled fault case; a happy-path pass does not prove correction", "legacy owner surface; not yet canonical authenticated Payload journey", "interrupted runs can lose final evidence and ledger registration", "cleanup is not verified against provisioned resources", "no implemented single-flight fence; serialize externally", "provisioned public URL is not yet browser-checked"]
+    }
+  ]
+}

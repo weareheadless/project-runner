@@ -19,6 +19,7 @@ from pathlib import Path
 from tick import ROOT, Ctx, board, fields
 import credentials
 import availability
+import test_results
 from quota import quota_error, suspension
 
 
@@ -483,6 +484,10 @@ def check_pr_closures(ctx, state, current):
 
 
 def step(ctx, state):
+    # GitHub reporting is zero-model work: retain it even during quota cooldowns.
+    test_reports = test_results.process_pending(ctx)
+    if test_reports['processed'] or test_reports['errors']:
+        save(ctx.state / 'test-report-health.json', test_reports)
     process_outbox(ctx)
     if quota_check(ctx, state):
         return state
