@@ -52,6 +52,9 @@ class SupervisorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        quota_patch = patch.object(s, 'quota_check', return_value=False)
+        quota_patch.start()
+        self.addCleanup(quota_patch.stop)
         self.ctx = Mock()
         self.ctx.state = Path(self.tmp.name)
         self.ctx.cfg = dict(name='test', orchestrator_model={'id': 'model', 'providerID': 'provider'},

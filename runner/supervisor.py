@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from tick import ROOT, Ctx, board, fields
+from quota import quota_error, suspension
 
 
 def save(path, data):
@@ -177,8 +178,109 @@ def process_outbox(ctx):
         path.rename(path.with_suffix('.sent'))
 
 
+def quota_failures(ctx, state, exclude=()):
+    sessions = [state['active']['id']] if state.get('active') else []
+    path = ctx.state / 'workers.json'
+    if path.exists():
+        sessions.extend(w['session'] for w in json.loads(path.read_text()).values())
+    failures = []
+    for sid in dict.fromkeys(sessions):
+        if sid in exclude:
+            continue
+        messages = oc('get', f'/api/session/{sid}/message?limit=6&order=desc')['data']
+        for m in messages:
+            if m['type'] == 'user':
+                break
+            error = m.get('error') or m.get('retry', {}).get('error')
+            marker = sid + ':' + m['id']
+            if error and marker not in state.get('quota_seen', []) and quota_error(error):
+                failures.append((sid, marker, error))
+                break
+    return failures
+
+
+def quota_check(ctx, state):
+    """Return True while suspended/recovering. No model calls before reset."""
+    now = time.time()
+    hold = state.get('quota')
+    if hold:
+        if now < hold['until']:
+            # Catch workers that hit the same exhausted account a few seconds
+            # later; don't leave their internal provider retries running.
+            for sid, marker, error in quota_failures(ctx, state, hold['sessions']):
+                info = oc('get', f'/api/session/{sid}')['data']
+                if not info.get('time', {}).get('idle'):
+                    oc('post', f'/api/session/{sid}/interrupt', {})
+                hold['sessions'].append(sid)
+                hold['markers'].append(marker)
+                hold['until'] = max(hold['until'], suspension(error, now, hold['attempt'])['until'])
+            return True
+        # Persist admission intent before resuming. Ambiguous delivery must not
+        # cause repeated prompts after a process restart.
+        if hold.get('resuming'):
+            state['paused'] = True
+            return True
+        hold['resuming'] = True
+        save(ctx.state / 'supervisor.json', state)
+        for sid in hold['sessions']:
+            info = oc('get', f'/api/session/{sid}')['data']
+            if not info.get('time', {}).get('idle'):
+                continue  # A provider/internal retry already resumed this run.
+            oc('post', f'/api/session/{sid}/prompt', {'text':
+                'Provider quota cooldown has elapsed. Resume your existing assigned run from durable '
+                'state. Preserve its claim, worktree, branch and completed steps; inspect current '
+                'state before retrying writes. Do not start a duplicate task or repeat a completed merge/deployment.'})
+        if state.get('active') and state['active']['id'] in hold['sessions']:
+            state['active']['started'] = now
+        state.setdefault('quota_seen', []).extend(hold['markers'])
+        state['quota_recovering'] = hold['sessions']
+        state.pop('quota')
+        state.pop('fingerprint', None)
+        save(ctx.state / 'supervisor.json', state)
+        return True
+    if state.get('paused'):
+        return False  # Quota recovery must never clear an unrelated safety pause.
+    recovering = state.get('quota_recovering', [])
+    if recovering and all(oc('get', f'/api/session/{sid}')['data'].get('outcome') == 'succeeded'
+                          for sid in recovering):
+        state.pop('quota_recovering', None)
+        state.pop('quota_attempts', None)
+        state.pop('quota_notified', None)
+    failures = quota_failures(ctx, state)
+    if not failures:
+        return False
+    attempt = state.get('quota_attempts', 0) + 1
+    timers = [suspension(error, now, attempt) for _, _, error in failures]
+    hold = max(timers, key=lambda x: x['until'])
+    hold.update(sessions=[sid for sid, _, _ in failures], markers=[m for _, m, _ in failures])
+    # Stop an internal provider retry loop before parking it; only affected
+    # sessions are interrupted, never unrelated workers that are making progress.
+    for sid in hold['sessions']:
+        info = oc('get', f'/api/session/{sid}')['data']
+        if not info.get('time', {}).get('idle'):
+            oc('post', f'/api/session/{sid}/interrupt', {})
+    state['quota'] = hold
+    state['quota_attempts'] = attempt
+    save(ctx.state / 'supervisor.json', state)
+    # One durable event per exhaustion episode, not one alert per poll/retry.
+    if not state.get('quota_notified'):
+        event = {'id': f'quota-{hold["markers"][0]}', 'kind': 'quota-paused',
+                 'message': 'Codex/provider quota exhausted. Work and claims are preserved. '
+                            + ('Will retry after the provider reset.' if hold['explicit_reset']
+                               else 'No reset time supplied; retrying after 5 minutes with backoff capped at one hour.'),
+                 'resume_at': hold['until']}
+        outbox = ctx.state / 'outbox'
+        outbox.mkdir(exist_ok=True)
+        save(outbox / (event['id'] + '.json'), event)
+        ui_notify(event)
+        state['quota_notified'] = True
+    return True
+
+
 def step(ctx, state):
     process_outbox(ctx)
+    if quota_check(ctx, state):
+        return state
     current = snapshot(ctx)
     fingerprint = digest(current)
     save(ctx.state / 'snapshot.json', current)

@@ -78,6 +78,23 @@ session before clearing `paused`; never remove a live lock or a worker claim.
 If admission was interrupted, inspect the saved session inbox before recovery.
 Don't re-prompt a worker whose execution may already be running.
 
+## Provider quota exhaustion
+
+The supervisor recognizes provider usage/quota errors in coordinator and worker
+sessions (including internal provider-retry messages). It preserves sessions,
+claims and branches, interrupts an affected retry loop, blocks new dispatches,
+and emits one quota alert per exhaustion episode. No model probes run while
+suspended. An explicit provider reset/Retry-After is respected with a 15-second
+margin. Without a usable reset timestamp, retries back off from 5 minutes to a
+maximum of one hour. Resume prompts target the same sessions, not fresh duplicate
+workers. A successful recovery clears the episode and resets backoff.
+
+Cooldown and resume-admission intent are durable across service restarts. If a
+restart occurs during an ambiguous resume acknowledgement, automation pauses for
+inspection instead of double-submitting work. Other failures and ordinary 429
+request throttles are not silently treated as subscription resets. Unsupported
+provider reset formats fall back to bounded backoff; no reset time is invented.
+
 Agent Markdown is the versioned source; install generates native V2 definitions
 inside this runner's `.opencode/` and copies global agent files for compatibility.
 This avoids modifying product checkouts or relying on broken global discovery.

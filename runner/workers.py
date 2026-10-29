@@ -10,6 +10,11 @@ from supervisor import oc, save
 
 
 def start(ctx, plan, brief, effort):
+    supervisor_path = ctx.state / 'supervisor.json'
+    if supervisor_path.exists():
+        supervisor = json.loads(supervisor_path.read_text())
+        if supervisor.get('quota') or supervisor.get('paused'):
+            raise ValueError('project suspended; do not dispatch another worker')
     if plan['repository'] not in ctx.cfg.get('repositories', [ctx.repo]):
         raise ValueError('worker repository not authorized')
     for key in ('agentRun', 'branch', 'baseline', 'worktree', 'scope', 'issueNumber'):

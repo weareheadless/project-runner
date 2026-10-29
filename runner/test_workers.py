@@ -54,3 +54,8 @@ class WorkerTests(unittest.TestCase):
         self.plan['repository'] = 'other/repo'
         with self.assertRaisesRegex(ValueError, 'not authorized'):
             workers.start(self.ctx, self.plan, 'spec', 'low')
+
+    def test_quota_suspension_blocks_new_dispatches(self):
+        (self.ctx.state/'supervisor.json').write_text(json.dumps({'quota': {'until': 2000}}))
+        with self.assertRaisesRegex(ValueError, 'suspended'):
+            workers.start(self.ctx, self.plan, 'spec', 'low')
