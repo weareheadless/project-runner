@@ -21,6 +21,7 @@ import credentials
 import availability
 import test_results
 import release_gap
+import retention
 from quota import quota_error, suspension
 
 
@@ -38,7 +39,16 @@ def oc(method, path, body=None):
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
     if result.returncode:
         raise RuntimeError(f'OpenCode {method} {path} failed (see service journal)')
-    return json.loads(result.stdout) if result.stdout.strip() else {}
+    if not result.stdout.strip():
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        # Large responses can be cut short; name the cause instead of dying in
+        # the JSON parser and stalling the whole pass.
+        raise RuntimeError(
+            f'OpenCode {method} {path} returned {len(result.stdout)} bytes that are not valid JSON '
+            f'({exc.msg}); request a smaller page') from exc
 
 
 def managed_pull_request(ctx, pull):
@@ -533,6 +543,7 @@ def step(ctx, state):
     if test_reports['processed'] or test_reports['errors']:
         save(ctx.state / 'test-report-health.json', test_reports)
     process_outbox(ctx)
+    retention.prune(ctx, state, time.time())
     release_gap.step(ctx, state, time.time())
     if quota_check(ctx, state):
         return state
