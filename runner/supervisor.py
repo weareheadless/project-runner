@@ -41,6 +41,14 @@ def oc(method, path, body=None):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
+def managed_pull_request(ctx, pull):
+    """A PR belongs to this project when its branch uses a managed prefix."""
+    prefixes = tuple(ctx.cfg.get('managed_branch_prefixes')
+                     or [ctx.cfg.get('branch_prefix', 'codex/'), 'docs/'])
+    ref = str(((pull or {}).get('head') or {}).get('ref') or '')
+    return ref.startswith(prefixes)
+
+
 def snapshot(ctx):
     cards = []
     for n in board(ctx):
@@ -54,8 +62,9 @@ def snapshot(ctx):
       pulls = []
       prs = ctx.api(f'https://api.github.com/repos/{repo}/pulls?state=open&per_page=100')
       for p in prs:
-        # Do not dispatch reviews for unrelated legacy PRs.
-        if not p['head']['ref'].startswith(ctx.cfg.get('branch_prefix', 'codex/')):
+        # Do not dispatch reviews for unrelated legacy PRs, but do not hide
+        # this project's own documentation branches either.
+        if not managed_pull_request(ctx, p):
             continue
         sha = p['head']['sha']
         checks = ctx.api(f'https://api.github.com/repos/{repo}/commits/{sha}/check-runs?per_page=100')

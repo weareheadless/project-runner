@@ -193,6 +193,19 @@ class SupervisorTests(unittest.TestCase):
         self.assertTrue(result['paused'])
         notify.assert_called_once()
 
+
+    def test_managed_pull_request_includes_docs_branches(self):
+        ctx = Mock()
+        ctx.cfg = {'branch_prefix': 'codex/'}
+        docs = {'head': {'ref': 'docs/dataforseo-consolidation-plan-20261029'}}
+        codex = {'head': {'ref': 'codex/ui-056-intake'}}
+        legacy = {'head': {'ref': 'release/api-20261028-adopt-draft'}}
+        self.assertTrue(s.managed_pull_request(ctx, docs))
+        self.assertTrue(s.managed_pull_request(ctx, codex))
+        self.assertFalse(s.managed_pull_request(ctx, legacy))
+        ctx.cfg['managed_branch_prefixes'] = ['codex/']
+        self.assertFalse(s.managed_pull_request(ctx, docs))
+
     def test_human_test_requires_live_instructions(self):
         with self.assertRaises(ValueError):
             s.notify(self.ctx, {'id': 'test', 'kind': 'human-test', 'message': 'test it'})
