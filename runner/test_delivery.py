@@ -1,9 +1,32 @@
 import unittest
-from delivery import validate, accepted
+from delivery import validate, accepted, transition_record
+import json
 from supervisor import digest
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_repeated_transitions_have_linear_history_and_keep_evidence(self):
+        record = {}
+        for index in range(40):
+            proposal = dict(state='implementing', next_action=f'phase {index}', evidence=f'proof-{index}')
+            record = transition_record(proposal, record, updated_at=index)
+        self.assertEqual(len(record['history']), 39)
+        self.assertEqual([x['updated_at'] for x in record['history']], list(range(39)))
+        self.assertEqual([x['proposal']['evidence'] for x in record['history']],
+                         [f'proof-{i}' for i in range(39)])
+        self.assertTrue(all('history' not in x for x in record['history']))
+        self.assertLess(len(json.dumps(record)), 10000)
+
+    def test_legacy_nested_snapshots_are_flattened_without_mutating_prior(self):
+        first = dict(state='investigating', proposal={'evidence': 'first'}, updated_at=1, history=[])
+        second = dict(state='implementing', proposal={'evidence': 'second'}, updated_at=2, history=[first])
+        prior = dict(state='merged', proposal={'evidence': 'third'}, updated_at=3, history=[first, second])
+        before = json.dumps(prior)
+        record = transition_record({'state': 'deployed'}, prior, updated_at=4)
+        self.assertEqual([x['proposal']['evidence'] for x in record['history']], ['first', 'second', 'third'])
+        self.assertTrue(all('history' not in x for x in record['history']))
+        self.assertEqual(json.dumps(prior), before)
+
     def setUp(self):
         self.p = dict(repository='o/r', issue=1, request='Remove intake button',
                       owner_session='ses_owner', state='verified', next_action='finish',

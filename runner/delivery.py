@@ -48,6 +48,20 @@ def accepted(proposal, verdict, reviewer_id, session):
         raise ValueError('review rejected or lacks independent evidence')
 
 
+def transition_record(proposal, prior, *, updated_at):
+    """Keep each historical state once, without embedding its history again.
+
+    Existing ledgers already list every prior transition at the top level.
+    Nested histories are redundant copies of those same entries, including in
+    ledgers written before this fix. Preserve each snapshot's other evidence.
+    """
+    snapshots = [*prior.get('history', []), prior] if prior else []
+    history = [{key: value for key, value in item.items() if key != 'history'}
+               for item in snapshots]
+    return dict(state=proposal['state'], proposal=proposal,
+                updated_at=updated_at, history=history)
+
+
 def apply(ctx, key, record):
     proposal = record['proposal']
     path = ctx.state / 'delivery-reviews' / f'{record["reviewer_session"]}.json'
@@ -83,8 +97,7 @@ def main():
             key = f'{p["repository"]}#{p["issue"]}'
             prior = ledger.get(key, {})
             if p['state'] not in ('verified', 'blocked'):
-                ledger[key] = dict(state=p['state'], proposal=p, updated_at=time.time(),
-                                   history=prior.get('history', []) + [prior] if prior else [])
+                ledger[key] = transition_record(p, prior, updated_at=time.time())
             else:
                 if prior.get('state') == 'reviewing':
                     raise ValueError('review already pending; reconcile it first')
