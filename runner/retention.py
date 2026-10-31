@@ -7,10 +7,13 @@ aged bookkeeping entries are eligible; live work is never touched.
 """
 import gzip
 import json
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
 DEFAULT_DAYS = 7
+DEFAULT_BUILD_ROOTS = ['/home/admin/releases']
 INTERVAL_SECONDS = 3600
 
 
@@ -34,6 +37,77 @@ def _age(value, now):
         return now - float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _git(directory, *args):
+    """Run one bounded read-only git query; any failure means 'unknown'."""
+    try:
+        result = subprocess.run(['git', '-C', str(directory), *args],
+                                capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode:
+        return None
+    return result.stdout.strip()
+
+
+def _tree_bytes(directory):
+    total = 0
+    for path in Path(directory).rglob('*'):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def sweep_builds(ctx, state, now=None, days=1, roots=None):
+    """Delete agent build checkouts that provably hold no unique work.
+
+    Only immediate children of the configured roots are considered. A checkout
+    is removable only when it is a git work tree, clean, tracks an upstream, has
+    no commit ahead of that upstream, and has been untouched for ``days``.
+    Anything unknown is kept: losing unpushed work costs far more than disk.
+    """
+    now = time.time() if now is None else now
+    configured = roots or (ctx.cfg.get('build_checkout_roots') if getattr(ctx, 'cfg', None) else None)
+    summary = {'removed': [], 'freed_bytes': 0,
+               'skipped': {'dirty': 0, 'ahead': 0, 'no-upstream': 0, 'recent': 0, 'not-git': 0}}
+    for root in configured or DEFAULT_BUILD_ROOTS:
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        for directory in sorted(base.iterdir()):
+            try:
+                if directory.is_symlink() or not directory.is_dir():
+                    continue
+                age = now - directory.stat().st_mtime
+            except OSError:
+                continue
+            if _git(directory, 'rev-parse', '--is-inside-work-tree') != 'true':
+                summary['skipped']['not-git'] += 1
+                continue
+            if _git(directory, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') is None:
+                summary['skipped']['no-upstream'] += 1
+                continue
+            dirty = _git(directory, 'status', '--porcelain')
+            if dirty is None or dirty:
+                summary['skipped']['dirty'] += 1
+                continue
+            if _git(directory, 'rev-list', '--count', '@{u}..HEAD') != '0':
+                summary['skipped']['ahead'] += 1
+                continue
+            if age < days * 86400:
+                summary['skipped']['recent'] += 1
+                continue
+            size = _tree_bytes(directory)
+            shutil.rmtree(directory, ignore_errors=True)
+            if directory.exists():
+                continue
+            summary['removed'].append(directory.name)
+            summary['freed_bytes'] += size
+    return summary
 
 
 def prune(ctx, state, now=None, days=DEFAULT_DAYS):
@@ -88,6 +162,8 @@ def prune(ctx, state, now=None, days=DEFAULT_DAYS):
     if len(seen) > 500:
         removed['quota_markers'] = len(seen) - 500
         state['quota_seen'] = seen[-500:]
+
+    removed['builds'] = sweep_builds(ctx, state, now)
 
     state['retention_last_run'] = now
     state['retention_last_result'] = {'at': now, 'days': days, **removed}

@@ -64,3 +64,111 @@ class RetentionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BuildSweepTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / 'releases'
+        self.root.mkdir()
+        self.now = 1_800_000_000
+        self.ctx = Ctx(self.tmp.name)
+        self.ctx.cfg = {}
+
+    def checkout(self, name, age_days=2):
+        path = self.root / name
+        (path / 'node_modules').mkdir(parents=True)
+        (path / 'node_modules' / 'blob').write_bytes(b'x' * 1024)
+        import os
+        stamp = self.now - age_days * 86400
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def fake_git(self, answers):
+        def git(directory, *args):
+            key = ' '.join(args)
+            for pattern, value in answers.items():
+                if pattern in key:
+                    return value
+            raise AssertionError(key)
+        return git
+
+    def test_removes_clean_synced_old_checkout(self):
+        path = self.checkout('build-clean')
+        answers = {
+            'rev-parse --is-inside-work-tree': 'true',
+            'symbolic-full-name': 'origin/codex/x',
+            'status --porcelain': '',
+            'rev-list --count': '0',
+        }
+        original = retention._git
+        retention._git = self.fake_git(answers)
+        self.addCleanup(setattr, retention, '_git', original)
+        summary = retention.sweep_builds(self.ctx, {}, self.now, roots=[str(self.root)])
+        self.assertEqual(summary['removed'], ['build-clean'])
+        self.assertEqual(summary['freed_bytes'], 1024)
+        self.assertFalse(path.exists())
+
+    def test_keeps_dirty_ahead_recent_unowned_and_unknown(self):
+        self.checkout('build-dirty')
+        self.checkout('build-ahead')
+        self.checkout('build-recent', age_days=0)
+        self.checkout('build-no-upstream')
+        (self.root / 'not-git').mkdir()
+
+        def git(directory, *args):
+            key = ' '.join(args)
+            name = Path(directory).name
+            if 'is-inside-work-tree' in key:
+                return 'true' if name.startswith('build') else None
+            if 'symbolic-full-name' in key:
+                return None if name == 'build-no-upstream' else 'origin/x'
+            if 'status --porcelain' in key:
+                return ' M file' if name == 'build-dirty' else ''
+            if 'rev-list --count' in key:
+                return '2' if name == 'build-ahead' else '0'
+            raise AssertionError(key)
+
+        original = retention._git
+        retention._git = git
+        self.addCleanup(setattr, retention, '_git', original)
+        summary = retention.sweep_builds(self.ctx, {}, self.now, roots=[str(self.root)])
+        self.assertEqual(summary['removed'], [])
+        self.assertEqual(summary['skipped']['dirty'], 1)
+        self.assertEqual(summary['skipped']['ahead'], 1)
+        self.assertEqual(summary['skipped']['recent'], 1)
+        self.assertEqual(summary['skipped']['no-upstream'], 1)
+        self.assertEqual(summary['skipped']['not-git'], 1)
+
+    def test_git_failure_is_unknown_not_deletable(self):
+        path = self.checkout('build-unknown')
+        original = retention._git
+
+        def broken(*args, **kwargs):
+            return None
+
+        retention._git = broken
+        self.addCleanup(setattr, retention, '_git', original)
+        summary = retention.sweep_builds(self.ctx, {}, self.now, roots=[str(self.root)])
+        self.assertEqual(summary['removed'], [])
+        self.assertTrue(path.exists())
+
+    def test_missing_root_is_ignored(self):
+        summary = retention.sweep_builds(self.ctx, {}, self.now, roots=['/nonexistent/root'])
+        self.assertEqual(summary['removed'], [])
+
+    def test_configured_roots_come_from_project_config(self):
+        self.checkout('build-configured')
+        self.ctx.cfg = {'build_checkout_roots': [str(self.root)]}
+        answers = {
+            'rev-parse --is-inside-work-tree': 'true',
+            'symbolic-full-name': 'origin/x',
+            'status --porcelain': '',
+            'rev-list --count': '0',
+        }
+        original = retention._git
+        retention._git = self.fake_git(answers)
+        self.addCleanup(setattr, retention, '_git', original)
+        summary = retention.sweep_builds(self.ctx, {}, self.now)
+        self.assertEqual(summary['removed'], ['build-configured'])

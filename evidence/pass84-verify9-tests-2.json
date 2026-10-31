@@ -1,0 +1,18 @@
+{
+  "schema": "project-runner.test-result/1",
+  "test_id": "ui047-verify9",
+  "run_id": "ui047-verify9-704a2b1f25a345c3b3de4c47de7a21ad",
+  "source_sha": "715f55c6c2b3e41f6f0478f201712c44bd8d8482",
+  "failed_step": "test-command",
+  "command": [
+    "/SOCIAL/site-agent/.venv/bin/python",
+    "-c",
+    "import site_agent,pytest;from pathlib import Path;assert Path(site_agent.__file__).resolve().is_relative_to(Path.cwd()/\"src\");raise SystemExit(pytest.main([\"-q\",\"tests/test_bootstrap.py\",\"tests/test_tenant_registration.py\",\"tests/test_runtime_activation.py\"]))"
+  ],
+  "status": "passed",
+  "failure_kind": "observed",
+  "exit_code": 0,
+  "failure_code": null,
+  "duration_seconds": 5.633,
+  "log": "/home/admin/tools/project-runner/.tick/site-agent/test-evidence/ui047-verify9-704a2b1f25a345c3b3de4c47de7a21ad/command.log"
+}

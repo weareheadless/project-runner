@@ -49,5 +49,8 @@
     "/SOCIAL/payload-releases/runs/helloada-app"
   ],
   "notification_repo": "weareheadless/project-runner",
-  "credential_failover": true
+  "credential_failover": true,
+  "build_checkout_roots": [
+    "/home/admin/releases"
+  ]
 }
