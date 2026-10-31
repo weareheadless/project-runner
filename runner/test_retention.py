@@ -172,3 +172,52 @@ class BuildSweepTests(unittest.TestCase):
         self.addCleanup(setattr, retention, '_git', original)
         summary = retention.sweep_builds(self.ctx, {}, self.now)
         self.assertEqual(summary['removed'], ['build-configured'])
+
+
+class SessionsDbTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / 'sessions.db'
+        self.now = 1_800_000_000
+
+    def build(self, rows=40000):
+        import sqlite3
+        connection = sqlite3.connect(self.db)
+        connection.execute('CREATE TABLE part (id integer primary key, data text)')
+        connection.executemany('INSERT INTO part (data) VALUES (?)', [('x' * 2000,) for _ in range(rows)])
+        connection.commit()
+        connection.execute('DELETE FROM part WHERE id > 50')
+        connection.commit()
+        connection.close()
+
+    def free_bytes(self):
+        import sqlite3
+        connection = sqlite3.connect(self.db)
+        value = connection.execute('PRAGMA freelist_count').fetchone()[0] * connection.execute('PRAGMA page_size').fetchone()[0]
+        connection.close()
+        return value
+
+    def test_rewrites_database_with_many_free_pages(self):
+        self.build()
+        before = self.free_bytes()
+        self.assertGreater(before, 1024 * 1024)
+        state = {}
+        summary = retention.reclaim_sessions_db(state, self.db, threshold_mb=1, now=self.now)
+        self.assertGreater(summary['freed_bytes'], 0)
+        self.assertLess(self.free_bytes(), 1024 * 1024)
+        self.assertEqual(state['sessions_db_vacuumed_at'], self.now)
+
+    def test_skips_small_database_and_recent_rewrite(self):
+        self.build(rows=200)
+        self.assertEqual(retention.reclaim_sessions_db({}, self.db, threshold_mb=512, now=self.now)['skipped'], 'below-threshold')
+        self.db.unlink()
+        self.build()
+        state = {'sessions_db_vacuumed_at': self.now - 60}
+        self.assertEqual(retention.reclaim_sessions_db(state, self.db, threshold_mb=1, now=self.now)['skipped'], 'interval')
+
+    def test_missing_or_corrupt_database_never_raises(self):
+        self.assertEqual(retention.reclaim_sessions_db({}, self.db, now=self.now)['skipped'], 'missing')
+        self.db.write_bytes(b'not a database')
+        self.assertIn(retention.reclaim_sessions_db({}, self.db, now=self.now)['skipped'],
+                      {'DatabaseError', 'OperationalError'})

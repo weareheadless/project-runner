@@ -14,6 +14,7 @@ from pathlib import Path
 
 DEFAULT_DAYS = 7
 DEFAULT_BUILD_ROOTS = ['/home/admin/releases']
+DEFAULT_SESSIONS_DB = '/home/admin/.local/share/opencode/opencode.db'
 INTERVAL_SECONDS = 3600
 
 
@@ -60,6 +61,50 @@ def _tree_bytes(directory):
         except OSError:
             continue
     return total
+
+
+def reclaim_sessions_db(state, path=None, threshold_mb=512, now=None):
+    """Rewrite the agent session database when deleted events leave free pages.
+
+    OpenCode deletes old stream events but SQLite keeps the pages, so the file
+    only ever grows (it reached 9.8GB with 8.8GB free). A rewrite is expensive,
+    so it runs at most daily and only past a real threshold.
+    """
+    import sqlite3
+
+    now = time.time() if now is None else now
+    target = Path(path or DEFAULT_SESSIONS_DB)
+    summary = {'freed_bytes': 0, 'skipped': None}
+    if not target.is_file():
+        summary['skipped'] = 'missing'
+        return summary
+    if now - float(state.get('sessions_db_vacuumed_at') or 0) < 86400:
+        summary['skipped'] = 'interval'
+        return summary
+    try:
+        connection = sqlite3.connect(target, timeout=10)
+        try:
+            free = connection.execute('PRAGMA freelist_count').fetchone()[0]
+            page = connection.execute('PRAGMA page_size').fetchone()[0]
+        finally:
+            connection.close()
+        free_bytes = free * page
+        if free_bytes < threshold_mb * 1024 * 1024:
+            summary['skipped'] = 'below-threshold'
+            return summary
+        before = target.stat().st_size
+        connection = sqlite3.connect(target, timeout=30)
+        try:
+            connection.execute('PRAGMA busy_timeout=30000')
+            connection.execute('VACUUM')
+        finally:
+            connection.close()
+        summary['freed_bytes'] = before - target.stat().st_size
+    except (sqlite3.Error, OSError) as exc:
+        summary['skipped'] = type(exc).__name__
+        return summary
+    state['sessions_db_vacuumed_at'] = now
+    return summary
 
 
 def sweep_builds(ctx, state, now=None, days=1, roots=None):
@@ -164,6 +209,8 @@ def prune(ctx, state, now=None, days=DEFAULT_DAYS):
         state['quota_seen'] = seen[-500:]
 
     removed['builds'] = sweep_builds(ctx, state, now)
+    removed['sessions_db'] = reclaim_sessions_db(
+        state, ctx.cfg.get('opencode_db') if getattr(ctx, 'cfg', None) else None, now=now)
 
     state['retention_last_run'] = now
     state['retention_last_result'] = {'at': now, 'days': days, **removed}
